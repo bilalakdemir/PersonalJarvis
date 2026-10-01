@@ -244,6 +244,24 @@ class DictationCompleted(Event):
     error: str | None = None
     #: What the generative polish pass did to ``text``. One of
     #: ``jarvis.dictation.polish.POLISH_STATUSES`` — that tuple is the single
+    #: vocabulary for this value; it is imported rather than
+    #: restated here because listing it twice is exactly how the five layers
+    #: that carry an outcome drifted apart before (AP-4 / BUG-008).
+    outcome: str = ""
+    #: User-facing explanation; empty when nothing needs explaining.
+    detail: str = ""
+    #: e.g. ``clipboard+ctrl_v`` / ``type`` — empty when nothing was inserted.
+    method: str = ""
+    language: str = ""
+    duration_s: float = 0.0
+    removed_words: int = 0
+    #: Why transcription failed, when it did (a provider error, a missing key,
+    #: a wedged engine). ``None`` on every path that did not fail. This is what
+    #: makes ``outcome="failed"`` distinguishable from ``outcome="empty"``:
+    #: before it existed, a provider 401 and plain silence looked identical.
+    error: str | None = None
+    #: What the generative polish pass did to ``text``. One of
+    #: ``jarvis.dictation.polish.POLISH_STATUSES`` — that tuple is the single
     #: vocabulary for this value, imported rather than restated here for the
     #: same reason ``outcome`` is (AP-4 / BUG-008). ``""`` on a completion the
     #: pass never ran for at all (a hangup, a crash before delivery), which is
@@ -1628,7 +1646,7 @@ class LatencyPhase(StrEnum):
     INTENT_DECISION = "intent_decision"
     ACK_FIRST_TOKEN = "ack_first_token"  # noqa: S105 — phase name, not a secret
     ACK_FIRST_AUDIO = "ack_first_audio"
-    BRAIN_FIRST_TOKEN = "brain_first_token"  # noqa: S105 — phase name, not a secret
+    BRAIN_FIRST_TOKEN = "brain_first_token"  # noqa: S105
     BRAIN_FIRST_AUDIO = "brain_first_audio"
     TURN_TO_FIRST_AUDIO = "turn_to_first_audio"
     # LATENCY_REPORT_001 t0..t9 diagnostic milestones.
@@ -2297,3 +2315,89 @@ class MarketplaceItemInstalled(Event):
     item_id: str = ""
     title: str = ""
     ready: bool = False
+
+
+# ----------------------------------------------------------------------
+# Managed Project State
+# ----------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class ProjectContextResolved(Event):
+    project_id: str = ""
+    project_name: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateLoaded(Event):
+    project_id: str = ""
+    state_revision: str = ""
+    current_task: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateInvalid(Event):
+    project_id: str = ""
+    issue_codes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateChangeProposed(Event):
+    project_id: str = ""
+    transaction_id: str = ""
+    source_state_revision: str = ""
+    files_affected: tuple[str, ...] = ()
+    expected_current_task: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateApprovalRequired(Event):
+    project_id: str = ""
+    transaction_id: str = ""
+    proposal_digest: str = ""
+    files_affected: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateTransactionStarted(Event):
+    project_id: str = ""
+    transaction_id: str = ""
+    files_affected: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateCommitted(Event):
+    project_id: str = ""
+    transaction_id: str = ""
+    resulting_state_revision: str = ""
+    changed_files: tuple[str, ...] = ()
+    current_task: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateRolledBack(Event):
+    project_id: str = ""
+    transaction_id: str = ""
+    changed_files: tuple[str, ...] = ()
+    error: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateTransactionRejected(Event):
+    project_id: str = ""
+    transaction_id: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateTransactionFailed(Event):
+    project_id: str = ""
+    transaction_id: str = ""
+    error: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentTaskChanged(Event):
+    project_id: str = ""
+    transaction_id: str = ""
+    previous_task: str | None = None
+    current_task: str | None = None
