@@ -877,6 +877,23 @@ def _register_runtime_manager(manager: Any) -> None:
         log.debug("Runtime supervisor gateway registration failed: %s", exc)
 
 
+def _wire_project_context(manager: Any) -> None:
+    """Enable N-12 routing only when a managed-project registry exists."""
+
+    try:
+        from jarvis.brain.project_context import (
+            ProjectContextResolver,
+            ProjectTurnContext,
+        )
+        from jarvis.projects import default_registry_path
+
+        if not default_registry_path().is_file():
+            return
+        manager._project_turn_context = ProjectTurnContext(ProjectContextResolver())
+    except Exception:  # noqa: BLE001 — optional project routing must not block boot
+        log.warning("Project context wiring skipped", exc_info=True)
+
+
 def _phase2_full_brain(
     tier: Literal["router"] = "router",
     bus: Any | None = None,
@@ -999,6 +1016,7 @@ def _phase2_full_brain(
         people=people,
         contacts=contact_store,
     )
+    _wire_project_context(manager)
 
     # Context-aware readbacks (maintainer mandate: no fixed stock phrases). The
     # composer is built in fallback-only mode when the flash path is disabled, so
@@ -1482,6 +1500,7 @@ def _legacy_full_brain(bus: Any | None = None) -> Any:
         soul=soul,
         people=people,
     )
+    _wire_project_context(manager)
 
     # Keep the legacy/headless path on the same public supervisor-tool boundary
     # as the primary router factory.
