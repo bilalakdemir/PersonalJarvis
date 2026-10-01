@@ -1,0 +1,79 @@
+name: N11 Apply Capability Governance
+
+on:
+  push:
+    branches: [n11-capability-governance]
+    paths: [.github/workflows/n11-apply.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: n11-capability-governance
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Apply exact patches
+        run: |
+          python scripts/n11_patch_protocols_gateway.py
+          python scripts/n11_patch_broker.py
+          python scripts/n11_patch_executor_a.py
+          python scripts/n11_patch_executor_b.py
+
+      - name: Compile touched Python
+        run: |
+          python -m compileall -q \
+            jarvis/safety/capabilities.py \
+            jarvis/safety/governance.py \
+            jarvis/core/protocols.py \
+            jarvis/safety/tool_executor.py \
+            jarvis/brain/tool_gateway.py \
+            jarvis/missions/workers/worker_tool_broker.py \
+            tests/unit/safety/test_capabilities.py \
+            tests/unit/safety/test_governance.py \
+            tests/unit/safety/test_tool_executor_capabilities.py \
+            tests/unit/missions/test_worker_tool_broker_capabilities.py
+
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            "pytest>=8" "pytest-asyncio>=0.23" \
+            "pydantic>=2.9,<3" "pydantic-settings>=2.6" \
+            "pyyaml>=6" "loguru>=0.7" "structlog>=24.4" \
+            "httpx>=0.27" "platformdirs>=4"
+
+      - name: Run N-11 regression gate
+        env:
+          PYTHONPATH: .
+        run: |
+          pytest -q \
+            tests/unit/safety/test_capabilities.py \
+            tests/unit/safety/test_governance.py \
+            tests/unit/safety/test_tool_executor_capabilities.py \
+            tests/unit/safety/test_tool_executor_voice_confirm.py \
+            tests/unit/missions/test_worker_tool_broker_capabilities.py
+
+      - name: Verify patch cleanliness
+        run: git diff --check
+
+      - name: Commit verified source changes
+        run: |
+          git config user.name "jarvis-n11-bot"
+          git config user.email "jarvis-n11-bot@users.noreply.github.com"
+          git add \
+            jarvis/core/protocols.py \
+            jarvis/brain/tool_gateway.py \
+            jarvis/missions/workers/worker_tool_broker.py \
+            jarvis/safety/tool_executor.py
+          git commit -m "Implement N-11 capability and governance enforcement"
+          git push origin HEAD:n11-capability-governance
