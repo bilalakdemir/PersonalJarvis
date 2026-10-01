@@ -32,6 +32,15 @@ from .registry import (
     default_registry_path,
     load_registry,
 )
+from .state_store import ProjectStateApprovalError, ProjectStateStore
+from .transaction import (
+    ProjectStatePathError,
+    ProjectStateReplayError,
+    ProjectStateRollbackError,
+    ProjectStateStaleRevisionError,
+    ProjectStateTransactionError,
+    ProjectStateValidationError,
+)
 
 __all__ = [
     "CANONICAL_PROJECT_FILES",
@@ -45,9 +54,17 @@ __all__ = [
     "ProjectRegistryEntry",
     "ProjectRegistryError",
     "ProjectStateApproval",
+    "ProjectStateApprovalError",
     "ProjectStateChangeProposal",
+    "ProjectStatePathError",
     "ProjectStateProposalError",
+    "ProjectStateReplayError",
+    "ProjectStateRollbackError",
+    "ProjectStateStaleRevisionError",
+    "ProjectStateStore",
+    "ProjectStateTransactionError",
     "ProjectStateTransactionResult",
+    "ProjectStateValidationError",
     "ProjectValidationIssue",
     "ProjectValidationResult",
     "build_project_state_proposal",
