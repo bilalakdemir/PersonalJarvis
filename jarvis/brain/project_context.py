@@ -1,6 +1,7 @@
 """Deterministic, read-only project-context resolution for brain turns."""
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -17,6 +18,8 @@ from jarvis.projects import (
 
 _WORD_RE = re.compile(r"[^\W_]+(?:[-'][^\W_]+)*", re.UNICODE)
 _SIGNIFICANT_TOKEN_MIN = 3
+
+log = logging.getLogger(__name__)
 
 
 class ProjectContextResolutionStatus(str, Enum):
@@ -164,6 +167,7 @@ class ProjectContextResolver:
         try:
             return load_registry(self._registry_path)
         except ProjectRegistryError as exc:
+            log.debug("project registry unavailable: %s", exc)
             return _unavailable(str(exc))
 
     @staticmethod
@@ -307,7 +311,7 @@ class ProjectContextResolver:
 _CONTINUATION_RE = re.compile(
     r"\b(?:continue|keep going|carry on|resume|same project|"
     + r"devam(?: et| edelim| edebiliriz)?|ayn[ıi] proj|buradan devam|"
-    + r"weiter|weitermachen|fortsetzen)\b",
+    + r"weiter|weitermachen|fortsetzen)\b",  # i18n-allow
     re.IGNORECASE,
 )
 
