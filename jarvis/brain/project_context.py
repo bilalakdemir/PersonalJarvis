@@ -302,3 +302,128 @@ class ProjectContextResolver:
         return ProjectContextResolution(
             status=ProjectContextResolutionStatus.NO_PROJECT
         )
+
+
+_CONTINUATION_RE = re.compile(
+    r"\b(?:continue|keep going|carry on|resume|same project|"
+    + r"devam(?: et| edelim| edebiliriz)?|ayn[ıi] proj|buradan devam|"
+    + r"weiter|weitermachen|fortsetzen)\b",
+    re.IGNORECASE,
+)
+
+
+def is_clear_project_continuation(user_text: str) -> bool:
+    """Return whether the current turn explicitly asks to continue prior work."""
+
+    return bool(_CONTINUATION_RE.search(user_text))
+
+
+def render_project_context(resolution: ProjectContextResolution) -> str:
+    """Render structural project state for current-turn context only."""
+
+    if resolution.status is ProjectContextResolutionStatus.NO_PROJECT:
+        return ""
+
+    if resolution.status is ProjectContextResolutionStatus.AMBIGUOUS:
+        return (
+            "[PROJECT CONTEXT — AMBIGUOUS]\n"
+            "No project has been selected for this turn. Do not choose a project "
+            "from conversation history or memory. Ask one targeted clarification "
+            "before project-mutating work."
+        )
+
+    if resolution.status is ProjectContextResolutionStatus.UNAVAILABLE:
+        detail = resolution.detail or "canonical project state is unavailable"
+        project = (
+            f" Project ID: {resolution.project_id}."
+            if resolution.project_id
+            else ""
+        )
+        return (
+            "[PROJECT CONTEXT — CANONICAL STATE UNAVAILABLE]\n"
+            f"{detail}.{project}\n"
+            "Do not reconstruct or replace canonical project state from "
+            "conversation history or memory."
+        )
+
+    snapshot = resolution.snapshot
+    if snapshot is None:
+        return ""
+
+    decisions = "; ".join(
+        f"{item.decision_id}: {item.title}"
+        for item in snapshot.active_decisions
+    ) or "None"
+    backlog = "; ".join(snapshot.relevant_backlog_items) or "None"
+    return "\n".join(
+        (
+            "[PROJECT CONTEXT — AUTHORITATIVE CANONICAL STATE]",
+            f"Project ID: {snapshot.project_id}",
+            f"Project: {snapshot.project_name}",
+            f"Main goal: {snapshot.main_goal}",
+            f"Phase: {snapshot.phase}",
+            f"CURRENT task: {snapshot.current_task or 'None'}",
+            f"Last completed: {snapshot.last_completed}",
+            f"Next logical step: {snapshot.next_step}",
+            f"Blockers: {snapshot.blockers}",
+            f"Active decisions: {decisions}",
+            f"Relevant backlog: {backlog}",
+            f"State revision: {snapshot.state_revision}",
+            (
+                "Authority rule: this canonical project state overrides conflicting "
+                "conversation history or memory for project execution state."
+            ),
+        )
+    )
+
+
+class ProjectTurnContext:
+    """Conversation-scoped routing hints; canonical state is always reloaded."""
+
+    def __init__(self, resolver: ProjectContextResolver) -> None:
+        self._resolver = resolver
+        self._active_by_conversation: dict[str, str] = {}
+
+    def resolve_turn(
+        self,
+        user_text: str,
+        *,
+        conversation_id: str | None = None,
+        explicit_project: str | None = None,
+    ) -> ProjectContextResolution:
+        active_project_id = (
+            self._active_by_conversation.get(conversation_id)
+            if conversation_id
+            else None
+        )
+        resolution = self._resolver.resolve(
+            user_text,
+            explicit_project=explicit_project,
+            active_project_id=active_project_id,
+            continuation=bool(
+                active_project_id
+                and is_clear_project_continuation(user_text)
+            ),
+        )
+        if (
+            conversation_id
+            and resolution.status is ProjectContextResolutionStatus.RESOLVED
+            and resolution.project_id
+        ):
+            self._active_by_conversation[conversation_id] = resolution.project_id
+        return resolution
+
+    def build_turn_block(
+        self,
+        user_text: str,
+        *,
+        conversation_id: str | None = None,
+        explicit_project: str | None = None,
+    ) -> str:
+        return render_project_context(
+            self.resolve_turn(
+                user_text,
+                conversation_id=conversation_id,
+                explicit_project=explicit_project,
+            )
+        )
