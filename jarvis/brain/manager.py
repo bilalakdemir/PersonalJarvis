@@ -119,6 +119,7 @@ from .local_action_gate import (
 from .local_action_gate import _normalize as _gate_normalize
 from .mission_command_gate import match_mission_command
 from .persona_loader import load_effective_persona_prompt
+from .project_context import ProjectContextResolver, ProjectTurnContext
 from .provider_registry import BrainProviderRegistry
 from .rate_limit_tracker import RateLimitTracker
 from .streaming import aggregate
@@ -2748,6 +2749,7 @@ class BrainManager:
         wiki_injector: "WikiContextInjector | None" = None,  # noqa: UP037
         contacts: Any = None,
         readback_composer: "ReadbackComposer | None" = None,  # noqa: UP037
+        project_context_resolver: ProjectContextResolver | None = None,
     ) -> None:
         self._config = config
         self._bus = bus
@@ -2816,6 +2818,15 @@ class BrainManager:
         # Per-turn wiki context suffix; set in generate() and consumed by
         # _build_system_prompt().  Reset to "" after each turn.
         self._wiki_context_suffix: str = ""
+        # N-12: optional structural project routing. Disabled when no managed-
+        # project registry is configured, preserving ordinary/non-project turns.
+        # The conversation map stores only project identity as a routing hint;
+        # canonical state is reloaded from disk on every resolved turn.
+        self._project_turn_context: ProjectTurnContext | None = (
+            ProjectTurnContext(project_context_resolver)
+            if project_context_resolver is not None
+            else None
+        )
         # Per-turn detected language (de/en/es or "" when ambiguous/pinned),
         # set at the top of generate(); consumed by _reply_language_directive()
         # in auto mode to hard-pin the turn's language so a tool-synthesis turn
@@ -3794,7 +3805,7 @@ class BrainManager:
             except Exception:  # noqa: BLE001 — the layers without the wiki are still Jarvis
                 log.debug("render_surface_prompt: wiki context skipped", exc_info=True)
         try:
-            turn_context = self._build_turn_context()
+            turn_context = self._build_turn_context(user_text=user_text)
         except Exception:  # noqa: BLE001 — the context block is a nicety
             log.debug("render_surface_prompt: turn context skipped", exc_info=True)
             turn_context = ""
@@ -4627,44 +4638,63 @@ class BrainManager:
             log.debug("AI Pointer task launch skipped", exc_info=True)
             return None
 
-    def _build_turn_context(self) -> str:
-        """Per-turn dynamic context for the user message (cache-optimized mode).
+    def _build_turn_context(
+        self,
+        *,
+        user_text: str | None = None,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Build dynamic context that belongs only to the current user turn.
 
-        Date/time + wiki context. Empty in legacy mode
-        (there these live in the system prompt instead). Riding on the user
-        message keeps the cached system prefix byte-stable across turns, which
-        is what actually lets the Gemini/Anthropic prompt cache hit.
+        Date/wiki/agentic context remains cache-optimized exactly as before.
+        N-12 project context is structural and current-turn-only, so it is
+        appended here even in legacy prompt-cache mode rather than placed in
+        persona/system prompt or conversation history.
         """
-        if not self._cache_optimized():
-            return ""
-        from datetime import datetime
+        parts: list[str] = []
 
-        # Deterministic English weekday. ``strftime('%A')`` renders the weekday
-        # name in the process locale ("Freitag" on German Windows, "vendredi" on
-        # French, a CJK string on a Chinese host), leaking a machine-locale,
-        # often non-English token into the LLM context. Index a fixed English
-        # tuple by ``weekday()`` (0=Monday) so the label reads the same English on
-        # every OS. The date is ISO-8601 (unambiguous internationally, unlike a
-        # dotted d.m.Y); wall-clock time stays local (``datetime.now``).
-        _weekdays_en = (
-            "Monday", "Tuesday", "Wednesday", "Thursday",
-            "Friday", "Saturday", "Sunday",
-        )
-        _now = datetime.now()
-        parts: list[str] = [
-            # Date/time belongs per-turn, never in the cached prefix (also fixes
-            # the missing BUG-005 date injection).
-            f"[Current date and time: {_weekdays_en[_now.weekday()]}, "
-            f"{_now.strftime('%Y-%m-%d %H:%M')}]"
-        ]
-        private = _TURN_OVERRIDE.get()
-        if private is not None and private.tool_context.get("tool_origin") == "society":
-            return "\n\n".join(parts)
-        if self._wiki_context_suffix:
-            parts.append(self._wiki_context_suffix)
-        agentic_block = self._agentic_focus_block()
-        if agentic_block:
-            parts.append(agentic_block)
+        if self._cache_optimized():
+            from datetime import datetime
+
+            _weekdays_en = (
+                "Monday", "Tuesday", "Wednesday", "Thursday",
+                "Friday", "Saturday", "Sunday",
+            )
+            _now = datetime.now()
+            parts.append(
+                f"[Current date and time: {_weekdays_en[_now.weekday()]}, "
+                f"{_now.strftime('%Y-%m-%d %H:%M')}]"
+            )
+
+            private = _TURN_OVERRIDE.get()
+            is_society_turn = (
+                private is not None
+                and private.tool_context.get("tool_origin") == "society"
+            )
+            if not is_society_turn:
+                if self._wiki_context_suffix:
+                    parts.append(self._wiki_context_suffix)
+                agentic_block = self._agentic_focus_block()
+                if agentic_block:
+                    parts.append(agentic_block)
+
+        if user_text and self._project_turn_context is not None:
+            try:
+                project_block = self._project_turn_context.build_turn_block(
+                    user_text,
+                    conversation_id=conversation_id,
+                )
+            except Exception:  # noqa: BLE001 — project routing must not crash a turn
+                log.exception("project context resolution failed unexpectedly")
+                project_block = (
+                    "[PROJECT CONTEXT — CANONICAL STATE UNAVAILABLE]\n"
+                    "Project context resolution failed. Do not reconstruct or "
+                    "replace canonical project state from conversation history "
+                    "or memory."
+                )
+            if project_block:
+                parts.append(project_block)
+
         return "\n\n".join(p for p in parts if p)
 
     def _agentic_focus_block(self) -> str:
@@ -11840,7 +11870,10 @@ class BrainManager:
         # wiki) once. In cache-optimized mode it rides on the user
         # message (keeping the cached system prompt stable); empty in legacy
         # mode. Reused for every provider in the fallback chain below.
-        turn_context = self._build_turn_context()
+        turn_context = self._build_turn_context(
+            user_text=user_text,
+            conversation_id=conversation_id,
+        )
         if screen_context.note:
             turn_context = (
                 f"{turn_context}\n\n{screen_context.note}"
