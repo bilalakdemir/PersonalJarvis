@@ -6,6 +6,8 @@ from pathlib import Path
 from jarvis.brain.project_context import (
     ProjectContextResolutionStatus,
     ProjectContextResolver,
+    ProjectTurnContext,
+    render_project_context,
 )
 
 
@@ -283,3 +285,121 @@ def test_explicit_project_beats_active_continuation_and_conversational_context(
     assert result.matched_by == "explicit"
     assert result.snapshot is not None
     assert result.snapshot.project_name == "Alpha Revenue Engine"
+
+
+def test_rendered_resolved_context_is_authoritative_and_turn_scoped(tmp_path: Path) -> None:
+    _, _, registry = _two_projects(tmp_path)
+    resolution = ProjectContextResolver(registry).resolve(
+        "Alpha Revenue Engine"
+    )
+
+    block = render_project_context(resolution)
+
+    assert "[PROJECT CONTEXT — AUTHORITATIVE CANONICAL STATE]" in block
+    assert "Project ID: alpha" in block
+    assert "CURRENT task: N-12 — Structural Project Context" in block
+    assert "canonical project state overrides conflicting conversation history" in block
+
+
+def test_ambiguous_render_blocks_history_or_memory_fallback(tmp_path: Path) -> None:
+    _, _, registry = _two_projects(tmp_path)
+    resolution = ProjectContextResolver(registry).resolve(
+        "Compare Alpha Revenue Engine with Beta Flight Desk."
+    )
+
+    block = render_project_context(resolution)
+
+    assert resolution.status is ProjectContextResolutionStatus.AMBIGUOUS
+    assert "No project has been selected" in block
+    assert "Do not choose a project from conversation history or memory" in block
+
+
+def test_conversation_scoped_active_projects_do_not_leak(tmp_path: Path) -> None:
+    _, _, registry = _two_projects(tmp_path)
+    turns = ProjectTurnContext(ProjectContextResolver(registry))
+
+    alpha_first = turns.resolve_turn(
+        "Work on Alpha Revenue Engine.",
+        conversation_id="conversation-alpha",
+    )
+    beta_first = turns.resolve_turn(
+        "Work on Beta Flight Desk.",
+        conversation_id="conversation-beta",
+    )
+    alpha_next = turns.resolve_turn(
+        "keep going",
+        conversation_id="conversation-alpha",
+    )
+    beta_next = turns.resolve_turn(
+        "continue",
+        conversation_id="conversation-beta",
+    )
+
+    assert alpha_first.project_id == "alpha"
+    assert beta_first.project_id == "beta"
+    assert alpha_next.project_id == "alpha"
+    assert beta_next.project_id == "beta"
+    assert alpha_next.matched_by == "active-continuation"
+    assert beta_next.matched_by == "active-continuation"
+
+
+def test_no_conversation_id_does_not_reuse_another_active_project(
+    tmp_path: Path,
+) -> None:
+    _, _, registry = _two_projects(tmp_path)
+    turns = ProjectTurnContext(ProjectContextResolver(registry))
+    turns.resolve_turn(
+        "Work on Alpha Revenue Engine.",
+        conversation_id="conversation-alpha",
+    )
+
+    result = turns.resolve_turn("keep going")
+
+    assert result.status is ProjectContextResolutionStatus.NO_PROJECT
+    assert result.snapshot is None
+
+
+def test_invalid_canonical_state_stays_unavailable_on_active_continuation(
+    tmp_path: Path,
+) -> None:
+    alpha, _, registry = _two_projects(tmp_path)
+    turns = ProjectTurnContext(ProjectContextResolver(registry))
+    first = turns.resolve_turn(
+        "Work on Alpha Revenue Engine.",
+        conversation_id="conversation-alpha",
+    )
+    assert first.status is ProjectContextResolutionStatus.RESOLVED
+
+    (alpha / "BACKLOG.md").unlink()
+    follow_up = turns.resolve_turn(
+        "continue",
+        conversation_id="conversation-alpha",
+    )
+
+    assert follow_up.status is ProjectContextResolutionStatus.UNAVAILABLE
+    assert follow_up.project_id == "alpha"
+    assert follow_up.snapshot is None
+
+
+def test_ambiguous_turn_does_not_silently_replace_active_project(
+    tmp_path: Path,
+) -> None:
+    _, _, registry = _two_projects(tmp_path)
+    turns = ProjectTurnContext(ProjectContextResolver(registry))
+    turns.resolve_turn(
+        "Work on Alpha Revenue Engine.",
+        conversation_id="conversation-alpha",
+    )
+
+    ambiguous = turns.resolve_turn(
+        "Compare Alpha Revenue Engine with Beta Flight Desk.",
+        conversation_id="conversation-alpha",
+    )
+    resumed = turns.resolve_turn(
+        "continue",
+        conversation_id="conversation-alpha",
+    )
+
+    assert ambiguous.status is ProjectContextResolutionStatus.AMBIGUOUS
+    assert resumed.status is ProjectContextResolutionStatus.RESOLVED
+    assert resumed.project_id == "alpha"
