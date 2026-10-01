@@ -137,3 +137,58 @@ class ProjectLoadResult:
 
     snapshot: ProjectContextSnapshot | None
     validation: ProjectValidationResult
+
+
+ProjectTransactionStatus = Literal["COMMITTED", "ROLLED_BACK", "FAILED"]
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectFileChange:
+    """One exact canonical-file replacement inside a project-state proposal."""
+
+    filename: str
+    previous_sha256: str | None
+    proposed_sha256: str
+    proposed_content: str
+    unified_diff: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateChangeProposal:
+    """Exact user-reviewable project-state mutation proposal."""
+
+    transaction_id: str
+    project_id: str
+    source_state_revision: str
+    changes: tuple[ProjectFileChange, ...]
+    reason: str
+    expected_current_task: str | None
+    expected_effect: str
+    proposal_digest: str
+
+    @property
+    def files_affected(self) -> tuple[str, ...]:
+        return tuple(change.filename for change in self.changes)
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateApproval:
+    """Approval binding for one exact proposal, created by a governance caller."""
+
+    transaction_id: str
+    proposal_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateTransactionResult:
+    """Durable outcome of one approved project-state transaction."""
+
+    transaction_id: str
+    project_id: str
+    status: ProjectTransactionStatus
+    source_state_revision: str
+    resulting_state_revision: str | None
+    changed_files: tuple[str, ...]
+    backup_dir: Path | None
+    validation: ProjectValidationResult
+    error: str | None = None

@@ -33,6 +33,13 @@ class ChatControlAdapter(Protocol):
     async def clear_saved(self, service: Any, session: Any) -> None: ...
 
 
+@runtime_checkable
+class EventPublisher(Protocol):
+    """Minimal event-publishing seam for higher layers."""
+
+    async def publish(self, event: Any) -> None: ...
+
+
 # ----------------------------------------------------------------------
 # Audio Data-Types
 # ----------------------------------------------------------------------

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
+from collections.abc import Mapping
 
 from .models import (
     CANONICAL_PROJECT_FILES,
@@ -107,15 +108,82 @@ def _decisions(decisions_text: str) -> tuple[ProjectDecision, ...]:
     return tuple(parsed)
 
 
-def compute_state_revision(documents: ProjectDocuments) -> str:
-    """Hash exact source bytes in canonical filename order for optimistic checks."""
+_MISSING_FILE_REVISION_MARKER = b"<PERSONAL-JARVIS:MISSING-CANONICAL-FILE>"
+
+
+def compute_state_revision_from_bytes(
+    file_bytes: Mapping[str, bytes | None],
+) -> str:
+    """Hash exact canonical source bytes, including explicit missing-file state.
+
+    Existing valid projects keep the N-09 revision formula unchanged. A missing
+    canonical file contributes a stable sentinel so a repair proposal can still
+    be bound to the exact broken source state without creating the file first.
+    """
     digest = hashlib.sha256()
     for filename in CANONICAL_PROJECT_FILES:
         digest.update(filename.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(documents.bytes_for(filename))
+        raw = file_bytes.get(filename)
+        digest.update(_MISSING_FILE_REVISION_MARKER if raw is None else raw)
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def compute_state_revision(documents: ProjectDocuments) -> str:
+    """Hash exact source bytes in canonical filename order for optimistic checks."""
+    return compute_state_revision_from_bytes(
+        {filename: documents.bytes_for(filename) for filename in CANONICAL_PROJECT_FILES}
+    )
+
+
+def project_documents_from_bytes(
+    file_bytes: Mapping[str, bytes],
+) -> ProjectDocuments:
+    """Decode one complete canonical document set without touching disk."""
+    decoded = {
+        filename: file_bytes[filename].decode("utf-8-sig")
+        for filename in CANONICAL_PROJECT_FILES
+    }
+    return ProjectDocuments(
+        project=decoded["PROJECT.md"],
+        state=decoded["STATE.md"],
+        tasks=decoded["TASKS.md"],
+        decisions=decoded["DECISIONS.md"],
+        backlog=decoded["BACKLOG.md"],
+        raw_project=file_bytes["PROJECT.md"],
+        raw_state=file_bytes["STATE.md"],
+        raw_tasks=file_bytes["TASKS.md"],
+        raw_decisions=file_bytes["DECISIONS.md"],
+        raw_backlog=file_bytes["BACKLOG.md"],
+    )
+
+
+def evaluate_project_documents(
+    entry: ProjectRegistryEntry,
+    documents: ProjectDocuments,
+) -> ProjectLoadResult:
+    """Validate and derive a snapshot from an in-memory canonical document set."""
+    parsed = _parse(documents)
+    validation = validate_project_state(entry, documents, parsed)
+    revision = compute_state_revision(documents)
+    snapshot = ProjectContextSnapshot(
+        project_id=entry.project_id,
+        project_name=parsed.project_name or entry.project_name,
+        root_path=entry.root_path,
+        main_goal=parsed.main_goal,
+        phase=parsed.phase,
+        current_task=parsed.state_current_task,
+        last_completed=parsed.last_completed,
+        next_step=parsed.next_step,
+        blockers=parsed.blockers,
+        active_decisions=tuple(
+            decision for decision in parsed.decisions if decision.status == "ACTIVE"
+        ),
+        relevant_backlog_items=(),
+        state_revision=revision,
+    )
+    return ProjectLoadResult(snapshot=snapshot, validation=validation)
 
 
 def _read_canonical_file(root: Path, filename: str) -> tuple[str, bytes]:
@@ -200,25 +268,4 @@ def load_project_context(entry: ProjectRegistryEntry) -> ProjectLoadResult:
     if documents is None:
         return ProjectLoadResult(snapshot=None, validation=read_validation)
 
-    parsed = _parse(documents)
-    validation = validate_project_state(entry, documents, parsed)
-    revision = compute_state_revision(documents)
-    snapshot = ProjectContextSnapshot(
-        project_id=entry.project_id,
-        project_name=parsed.project_name or entry.project_name,
-        root_path=entry.root_path,
-        main_goal=parsed.main_goal,
-        phase=parsed.phase,
-        current_task=parsed.state_current_task,
-        last_completed=parsed.last_completed,
-        next_step=parsed.next_step,
-        blockers=parsed.blockers,
-        active_decisions=tuple(
-            decision for decision in parsed.decisions if decision.status == "ACTIVE"
-        ),
-        # Relevance is request-scoped and belongs to the later Chief-Agent context
-        # integration slice. N-09 intentionally proves no backlog item relevant.
-        relevant_backlog_items=(),
-        state_revision=revision,
-    )
-    return ProjectLoadResult(snapshot=snapshot, validation=validation)
+    return evaluate_project_documents(entry, documents)
