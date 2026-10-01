@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -39,6 +40,14 @@ from .approval_surface import (
     UNATTENDED,
     resolve_approval_surface,
 )
+from .capabilities import (
+    CapabilityDenyCode,
+    CapabilityGrant,
+    CapabilityRequirementsError,
+    evaluate_capability,
+    requirements_for_tool,
+)
+from .governance import evaluate_governance
 from .risk_tier import ActionBlocked, RiskTierEvaluator
 
 if TYPE_CHECKING:
@@ -91,6 +100,17 @@ def _optional_string(value: Any) -> str | None:
     return normalized or None
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingVoiceAction:
+    tool: Tool
+    args: dict[str, Any]
+    project_id: str | None
+    task_id: str | None
+    project_root: str | None
+    capability_grant: CapabilityGrant | None
+    delegated: bool
+
+
 class ToolExecutor:
     """Pipeline: evaluate → (plausibility) → (approve) → execute → log."""
 
@@ -114,7 +134,7 @@ class ToolExecutor:
         # conversational turn, keyed by trace_id, awaiting an ``execute_confirmed``
         # (user said "ja") or ``cancel_pending`` (user said "nein"). The tool +
         # args live here OUT-OF-BAND — never in the serialized ToolResult.output.
-        self._pending_voice: dict[UUID, tuple[Tool, dict[str, Any]]] = {}
+        self._pending_voice: dict[UUID, _PendingVoiceAction] = {}
 
     #: The longest a surface may keep an approval open, whatever it asks for.
     MAX_APPROVAL_TIMEOUT_S = 900.0
@@ -202,6 +222,73 @@ class ToolExecutor:
         except Exception:  # noqa: BLE001
             log.debug("publish_guard_denied failed", exc_info=True)
 
+    async def _policy_denied(
+        self,
+        *,
+        tid: UUID,
+        tool: Tool,
+        namespace: str,
+        code: str,
+        reason: str,
+    ) -> ToolResult:
+        stable_reason = f"{namespace}:{code}: {reason}"
+        await self._bus.publish(ActionDenied(
+            trace_id=tid,
+            tool_name=tool.name,
+            reason=stable_reason,
+        ))
+        return ToolResult(success=False, output=None, error=stable_reason)
+
+    async def _enforce_governance_and_capability(
+        self,
+        *,
+        tid: UUID,
+        tool: Tool,
+        args: dict[str, Any],
+        project_id: str | None,
+        task_id: str | None,
+        project_root: str | None,
+        capability_grant: CapabilityGrant | None,
+        delegated: bool,
+    ) -> ToolResult | None:
+        try:
+            requirements = requirements_for_tool(
+                tool,
+                args,
+                project_id=project_id,
+                task_id=task_id,
+            )
+        except CapabilityRequirementsError as exc:
+            return await self._policy_denied(
+                tid=tid,
+                tool=tool,
+                namespace="capability",
+                code=CapabilityDenyCode.MALFORMED_REQUIREMENTS.value,
+                reason=str(exc),
+            )
+
+        governance = evaluate_governance(requirements, project_root=project_root)
+        if not governance.allowed:
+            return await self._policy_denied(
+                tid=tid,
+                tool=tool,
+                namespace="governance",
+                code=governance.code.value if governance.code is not None else "denied",
+                reason=governance.reason,
+            )
+
+        if delegated:
+            capability = evaluate_capability(capability_grant, requirements)
+            if not capability.allowed:
+                return await self._policy_denied(
+                    tid=tid,
+                    tool=tool,
+                    namespace="capability",
+                    code=capability.code.value if capability.code is not None else "invalid_grant",
+                    reason=capability.reason,
+                )
+        return None
+
     async def _approval_unavailable(
         self,
         tool: Tool,
@@ -268,6 +355,11 @@ class ToolExecutor:
         trace_id: UUID | None = None,
         rationale: str = "",
         cancel_token: CancelToken | None = None,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        project_root: str | None = None,
+        capability_grant: CapabilityGrant | None = None,
+        delegated: bool = False,
     ) -> ToolResult:
         tid = trace_id or uuid4()
         t_start = time.perf_counter()
@@ -298,6 +390,21 @@ class ToolExecutor:
                 reason=f"blacklist: {exc.pattern}",
             ))
             return ToolResult(success=False, output=None, error=str(exc))
+
+        # Hard safety above stays first; the tier decision is not acted on
+        # until governance and delegated capability checks have both passed.
+        policy_denied = await self._enforce_governance_and_capability(
+            tid=tid,
+            tool=tool,
+            args=args,
+            project_id=project_id,
+            task_id=task_id,
+            project_root=project_root,
+            capability_grant=capability_grant,
+            delegated=delegated,
+        )
+        if policy_denied is not None:
+            return policy_denied
 
         # 2. Plausibility check (Phase 4): the result can force confirmation
         # even when the tier workflow does not (for example, ``monitor``).
@@ -413,7 +520,15 @@ class ToolExecutor:
             # work on the turn). ``needs_confirm`` already excludes whitelist
             # downgrades, so this fires only for genuinely consequential tools.
             if voice_confirm:
-                self._pending_voice[tid] = (tool, dict(args))
+                self._pending_voice[tid] = _PendingVoiceAction(
+                    tool=tool,
+                    args=dict(args),
+                    project_id=project_id,
+                    task_id=task_id,
+                    project_root=project_root,
+                    capability_grant=capability_grant,
+                    delegated=delegated,
+                )
                 log.info(
                     "voice-confirm: deferring %s (tier=%s) for two-turn confirmation",
                     tool.name, decision.tier,
@@ -508,6 +623,11 @@ class ToolExecutor:
             config=config_snapshot or {},
             memory_read=memory_read,
             approved_by=approved_by,
+            project_id=project_id,
+            task_id=task_id,
+            project_root=project_root,
+            capability_grant=capability_grant,
+            delegated=delegated,
         )
         try:
             result = await tool.execute(args, ctx)
@@ -563,13 +683,41 @@ class ToolExecutor:
                 output=None,
                 error="voice-confirm expired (no pending action for this turn)",
             )
-        tool, args = pending
+        tool, args = pending.tool, pending.args
+        try:
+            self._evaluator.evaluate(tool, args)
+        except ActionBlocked as exc:
+            await self._bus.publish(ActionDenied(
+                trace_id=trace_id,
+                tool_name=tool.name,
+                reason=f"blacklist: {exc.pattern}",
+            ))
+            return ToolResult(success=False, output=None, error=str(exc))
+
+        policy_denied = await self._enforce_governance_and_capability(
+            tid=trace_id,
+            tool=tool,
+            args=args,
+            project_id=pending.project_id,
+            task_id=pending.task_id,
+            project_root=pending.project_root,
+            capability_grant=pending.capability_grant,
+            delegated=pending.delegated,
+        )
+        if policy_denied is not None:
+            return policy_denied
+
         ctx = ExecutionContext(
             trace_id=trace_id,
             user_utterance=user_utterance,
             config=config_snapshot or {},
             memory_read=memory_read,
             approved_by="user",
+            project_id=pending.project_id,
+            task_id=pending.task_id,
+            project_root=pending.project_root,
+            capability_grant=pending.capability_grant,
+            delegated=pending.delegated,
         )
         t_start = time.perf_counter()
         try:
@@ -601,7 +749,7 @@ class ToolExecutor:
         pending = self._pending_voice.pop(trace_id, None)
         if pending is None:
             return False
-        tool, _args = pending
+        tool = pending.tool
         await self._bus.publish(ActionDenied(
             trace_id=trace_id,
             tool_name=tool.name,

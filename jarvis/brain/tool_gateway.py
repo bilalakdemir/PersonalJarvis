@@ -202,6 +202,11 @@ class BrainSupervisorToolGateway:
             trace_id=request.trace_id,
             rationale=request.rationale,
             cancel_token=request.cancel_token,
+            project_id=request.project_id,
+            task_id=request.task_id,
+            project_root=request.project_root,
+            capability_grant=request.capability_grant,
+            delegated=request.delegated,
         )
 
     async def session_catalog(self, session_id: str) -> tuple[SupervisorToolDescriptor, ...]:

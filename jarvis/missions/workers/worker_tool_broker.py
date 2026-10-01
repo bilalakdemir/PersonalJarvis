@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 from contextlib import suppress
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Literal
@@ -27,6 +28,7 @@ from jarvis.core import runtime_refs
 from jarvis.core.protocols import SupervisorToolDescriptor, SupervisorToolRequest
 from jarvis.core.redact import safe_preview
 from jarvis.safety.approval_surface import INTERACTIVE
+from jarvis.safety.capabilities import CapabilityGrant
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +245,7 @@ class _BrokerScope:
     native_tool_names: tuple[str, ...]
     mission_id: str | None = None
     worker_id: str | None = None
+    capability_grant: CapabilityGrant | None = None
     _revoked: bool = False
     _state_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _active_tasks: set[asyncio.Task[Any]] = field(default_factory=set, repr=False)
@@ -390,6 +393,8 @@ class _BrokerScope:
                     user_utterance=self.task_text,
                     mission_id=self.mission_id,
                     worker_id=self.worker_id,
+                    capability_grant=self.capability_grant,
+                    delegated=True,
                     config_snapshot={
                         "voice_confirm": False,
                         # A mission worker is unattended, but its approvals
@@ -768,19 +773,26 @@ class WorkerToolBroker:
         ):
             return None
 
+        ttl_seconds = max(1.0, float(ttl_s))
         scope = _BrokerScope(
             task_text=task_text,
             gateway=gateway,
             loop=loop,
-            expires_at=time.monotonic() + max(1.0, float(ttl_s)),
+            expires_at=time.monotonic() + ttl_seconds,
             mcp_server_ids=tuple(dict.fromkeys(mcp_server_ids)),
             app_commands=requested_app_commands,
             native_tool_names=tuple(dict.fromkeys(native_tool_names)),
             mission_id=mission_id,
             worker_id=worker_id,
         )
-        if not scope.specs:
+        granted_tool_names = frozenset(str(spec["name"]) for spec in scope.specs)
+        if not granted_tool_names:
             return None
+        scope.capability_grant = CapabilityGrant(
+            grant_id=str(uuid4()),
+            tools=granted_tool_names,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+        )
         server = self._ensure_server()
         token = secrets.token_urlsafe(32)
         with self._lock:

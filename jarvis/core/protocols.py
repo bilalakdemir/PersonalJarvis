@@ -219,6 +219,11 @@ class ExecutionContext:
     config: dict[str, Any]
     memory_read: Any  # MemoryStore read-only handle
     approved_by: str | None = None  # "auto" | "user" | None (falls tier=safe)
+    project_id: str | None = None
+    task_id: str | None = None
+    project_root: str | None = None
+    capability_grant: Any | None = None
+    delegated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,6 +275,11 @@ class SupervisorToolRequest:
     rationale: str = ""
     mission_id: str | None = None
     worker_id: str | None = None
+    project_id: str | None = None
+    task_id: str | None = None
+    project_root: str | None = None
+    capability_grant: Any | None = None
+    delegated: bool = False
     config_snapshot: dict[str, Any] = field(default_factory=dict)
     cancel_token: CancelToken | None = None
 
