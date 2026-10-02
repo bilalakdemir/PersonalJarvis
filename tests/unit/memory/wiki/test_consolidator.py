@@ -25,9 +25,6 @@ from jarvis.brain.project_context import (
     ProjectContextResolution,
     ProjectContextResolutionStatus,
 )
-from jarvis.core.project_state_events import ProjectStateMemoryProposalRequested
-from jarvis.projects.models import ProjectContextSnapshot
-
 from jarvis.core.config import (
     BrainConfig,
     BrainProviderConfig,
@@ -37,6 +34,7 @@ from jarvis.core.config import (
     WikiMemoryConfig,
 )
 from jarvis.core.protocols import BrainDelta, BrainRequest
+from jarvis.core.project_state_events import ProjectStateMemoryProposalRequested
 from jarvis.memory.wiki.atomic_writer import AtomicWriter
 from jarvis.memory.wiki.consolidator import Consolidator
 from jarvis.memory.wiki.curator import WikiCurator
@@ -45,6 +43,7 @@ from jarvis.memory.wiki.journal import CandidateFact, CandidateJournal
 from jarvis.memory.wiki.log_writer import LogWriter
 from jarvis.memory.wiki.page import MarkdownPageRepository
 from jarvis.memory.wiki.vault_index import VaultIndex
+from jarvis.projects.models import ProjectContextSnapshot
 
 LENA_BODY = (
     "---\n"
