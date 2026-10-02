@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -33,6 +34,8 @@ _REQUIRED_PLAN_KEYS = frozenset(
 )
 _MAX_CANONICAL_CHARS = 120_000
 _DEFAULT_MAX_OUTPUT_TOKENS = 12_000
+
+log = logging.getLogger(__name__)
 
 PlannerCompletion = Callable[[BrainRequest], Awaitable[str]]
 
@@ -267,7 +270,12 @@ class ProjectStateMemoryPlanner:
             value = int(
                 self._root_config.memory.wiki.curator.max_output_tokens
             )
-        except (AttributeError, TypeError, ValueError):
+        except (AttributeError, TypeError, ValueError) as exc:
+            log.debug(
+                "ProjectStateMemoryPlanner: invalid output-token config; "
+                "using default (%s)",
+                exc,
+            )
             return _DEFAULT_MAX_OUTPUT_TOKENS
         return max(1_000, value)
 
@@ -319,6 +327,10 @@ class ProjectStateMemoryPlanner:
             try:
                 _parse_plan(agg.text)
             except ProjectStateMemoryPlannerError as exc:
+                log.debug(
+                    "ProjectStateMemoryPlanner: provider response rejected: %s",
+                    exc,
+                )
                 return str(exc)
             return None
 
