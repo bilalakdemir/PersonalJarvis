@@ -224,6 +224,11 @@ def _row_to_item(row: aiosqlite.Row) -> TemporaryMemoryItem:
     try:
         raw_refs = json.loads(str(row["evidence_json"] or "[]"))
     except (json.JSONDecodeError, TypeError, ValueError):
+        log.warning(
+            "TemporaryMemoryStore: invalid evidence_json for item %s; "
+            "using empty evidence refs",
+            row["id"],
+        )
         raw_refs = []
     return TemporaryMemoryItem(
         id=int(row["id"]),
