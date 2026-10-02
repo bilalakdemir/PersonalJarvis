@@ -350,6 +350,81 @@ async def test_update_merges_in_place_and_judge_saw_the_body(stack) -> None:
     assert "- Lena works at the animal clinic." in content
 
 
+@pytest.mark.asyncio
+async def test_behavioral_candidate_is_deferred_before_wiki_judge(stack) -> None:
+    _vault_root, _curator, journal = stack
+    journal.append(
+        [
+            CandidateFact(
+                fact="The user plays golf actively with friends.",
+                kind="activity",
+                subjects=("ruben", "golf"),
+                basis="behavioral",
+                salience=4,
+            )
+        ],
+        source_label="realtime:behavioral-governance",
+        turn_hash="behavioral-governance",
+    )
+
+    brain = FakeBrain([])
+    label = await _consolidator(stack, brain).run_once()
+
+    assert label == "journal-deferred:1"
+    assert brain.received_requests == []
+    assert len(journal.pending()) == 1
+
+
+@pytest.mark.asyncio
+async def test_project_candidate_is_deferred_before_wiki_judge(stack) -> None:
+    _vault_root, _curator, journal = stack
+    journal.append(
+        [
+            CandidateFact(
+                fact="Personal Jarvis completed its current milestone.",
+                kind="project",
+                subjects=("personal-jarvis",),
+                basis="explicit",
+            )
+        ],
+        source_label="realtime:project-governance",
+        turn_hash="project-governance",
+    )
+
+    brain = FakeBrain([])
+    label = await _consolidator(stack, brain).run_once()
+
+    assert label == "journal-deferred:1"
+    assert brain.received_requests == []
+    assert len(journal.pending()) == 1
+
+
+@pytest.mark.asyncio
+async def test_decision_candidate_waits_for_approval_before_wiki_judge(
+    stack,
+) -> None:
+    _vault_root, _curator, journal = stack
+    journal.append(
+        [
+            CandidateFact(
+                fact="The user decided to use a new long-term operating rule.",
+                kind="decision",
+                subjects=("ruben",),
+                basis="explicit",
+            )
+        ],
+        source_label="realtime:decision-governance",
+        turn_hash="decision-governance",
+    )
+
+    brain = FakeBrain([])
+    label = await _consolidator(stack, brain).run_once()
+
+    assert label == "journal-deferred:1"
+    assert brain.received_requests == []
+    assert len(journal.pending()) == 1
+
+
 RUBEN_FULL_BODY = (
     "---\n"
     "type: entity\n"
@@ -2516,8 +2591,8 @@ async def test_source_marker_carries_behavioral_basis(stack) -> None:
             kind="activity", subjects=("ruben", "golf"),
             evidence_turn_id="golf-turn",
             evidence_excerpt=(
-                "Evidence user turn [golf-turn]: I love being out on golf "
-                "courses with my buddies, playing this sport actively."
+                "Evidence user turn [golf-turn]: Remember that I love being "
+                "out on golf courses with my buddies, playing this sport actively."
             ),
             basis="behavioral", salience=4,
         )],
@@ -2555,6 +2630,11 @@ async def test_activity_candidate_requires_companion_concept_page(stack) -> None
         [CandidateFact(
             fact="The user plays golf actively with friends.",
             kind="activity", subjects=("ruben", "golf"),
+            evidence_turn_id="golf-companion-turn",
+            evidence_excerpt=(
+                "Evidence user turn [golf-companion-turn]: Remember that I "
+                "play golf actively with friends."
+            ),
             basis="behavioral", salience=4,
         )],
         source_label="realtime:golf-companion", turn_hash="golf-companion",
