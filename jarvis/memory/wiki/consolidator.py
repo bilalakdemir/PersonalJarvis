@@ -77,6 +77,7 @@ from jarvis.memory.wiki.wikilink import extract_wikilinks
 
 if TYPE_CHECKING:
     from jarvis.core.config import JarvisConfig
+    from jarvis.memory.persistent_approval import PersistentMemoryApprovalQueue
     from jarvis.memory.wiki.curator import WikiCurator
     from jarvis.memory.wiki.journal import CandidateJournal
     from jarvis.memory.wiki.search import VaultSearch
@@ -216,6 +217,7 @@ class Consolidator:
         k_nearest: int = 4,
         on_run_complete: Any = None,
         project_resolver: ProjectContextResolver | None = None,
+        persistent_approval_queue: PersistentMemoryApprovalQueue | None = None,
         event_publisher: EventPublisher | None = None,
     ) -> None:
         self._root_cfg = config
@@ -230,6 +232,7 @@ class Consolidator:
         self._k_nearest = max(1, int(k_nearest))
         self._memory_gate = MemoryPromotionGate()
         self._project_resolver = project_resolver
+        self._persistent_approval_queue = persistent_approval_queue
         self._event_publisher = event_publisher
         # Optional callback fired after a completed run (B7 wires the
         # self-documentation refresh here). Called best-effort.
@@ -488,6 +491,28 @@ class Consolidator:
                 telemetry.inc("wiki_governance_rejected")
                 rejected += 1
                 continue
+
+            if decision.outcome is MemoryPromotionOutcome.APPROVAL_REQUIRED:
+                queue = self._persistent_approval_queue
+                if queue is not None:
+                    approval = await queue.propose(
+                        candidate_id=row.id,
+                        content=row.fact,
+                        governance_class=governance_class.value,
+                    )
+                    if approval.status == "approved":
+                        eligible.append(row)
+                        telemetry.inc("wiki_governance_approved")
+                        continue
+                    if approval.status in {
+                        "rejected",
+                        "expired",
+                        "failed",
+                    }:
+                        await self._mark([row.id], status="rejected")
+                        telemetry.inc("wiki_governance_rejected")
+                        rejected += 1
+                        continue
 
             if decision.outcome is MemoryPromotionOutcome.ROUTE_TO_PROJECT_STATE:
                 await self._request_project_state_proposal(
@@ -1066,6 +1091,10 @@ class Consolidator:
                 continue
             if cid in duplicate_target_ids:
                 await self._mark([cid], status="skipped")
+                await self._persistent_approval_failed(
+                    cid,
+                    "judge proposed the same target twice",
+                )
                 log.warning(
                     "Consolidator: candidate %d proposed the same target twice; skipped",
                     cid,
@@ -1073,17 +1102,26 @@ class Consolidator:
                 continue
             if cid in noop_ids:
                 await self._mark([cid], status="consolidated", decision="noop")
+                await self._persistent_approval_applied(cid)
                 telemetry.inc("wiki_consolidator_noop")
                 continue
             plan = write_plan.get(cid)
             if plan is None:
                 # Judge returned nothing usable for this candidate.
                 await self._mark([cid], status="skipped")
+                await self._persistent_approval_failed(
+                    cid,
+                    "judge returned no usable decision",
+                )
                 log.debug("Consolidator: candidate %d unjudged — skipped", cid)
                 continue
             decision, target = plan
             if decision is None or target is None:
                 await self._mark([cid], status="skipped")
+                await self._persistent_approval_failed(
+                    cid,
+                    "judge returned an unwritable target",
+                )
                 continue
             required = required_targets.get(cid, {target})
             if required and required.issubset(applied_rel):
@@ -1092,9 +1130,14 @@ class Consolidator:
                     decision=decision,
                     target_path=target,
                 )
+                await self._persistent_approval_applied(cid)
                 telemetry.inc(f"wiki_consolidator_{decision}")
             elif required & rejected_rel:
                 await self._mark([cid], status="rejected", target_path=target)
+                await self._persistent_approval_failed(
+                    cid,
+                    "persistent writer rejected the approved candidate",
+                )
                 log.warning(
                     "Consolidator: write for candidate %d rejected "
                     "(secret guard / validation) — %s", cid, target,
@@ -1116,6 +1159,26 @@ class Consolidator:
                 )
 
         return len(deferred_ids), len(transient_ids)
+
+    async def _persistent_approval_applied(self, candidate_id: int) -> None:
+        queue = self._persistent_approval_queue
+        if queue is None:
+            return
+        item = await queue.get(candidate_id)
+        if item is not None and item.status == "approved":
+            await queue.mark_applied(candidate_id)
+
+    async def _persistent_approval_failed(
+        self,
+        candidate_id: int,
+        reason: str,
+    ) -> None:
+        queue = self._persistent_approval_queue
+        if queue is None:
+            return
+        item = await queue.get(candidate_id)
+        if item is not None and item.status == "approved":
+            await queue.mark_failed(candidate_id, reason)
 
     # ------------------------------------------------------------------
     # helpers
