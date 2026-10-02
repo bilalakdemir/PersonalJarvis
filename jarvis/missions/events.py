@@ -32,13 +32,8 @@ class MissionDispatched(_PayloadBase):
     parent_mission_id: str | None = None
     priority: int = 0
     language: Literal["de", "en"] = "de"
-    # N-13: immutable delegation correlation captured at mission creation.
-    # These fields are optional so historical/non-project missions remain valid.
-    parent_trace_id: str | None = None
-    project_id: str | None = None
-    task_id: str | None = None
-    project_root: str | None = None
-    project_state_revision: str | None = None
+    # N-13: immutable project correlation captured at mission creation.
+    # Optional fields preserve historical and ordinary non-project missions.
     project_id: str | None = None
     task_id: str | None = None
     project_root: str | None = None
