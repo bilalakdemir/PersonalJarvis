@@ -247,3 +247,24 @@ async def test_spawn_worker_carries_execution_context_into_mission_dispatch(
     assert dispatched["project_id"] == "alpha"
     assert dispatched["task_id"] == "N-13 — Project-Scoped Delegation Bridge"
     assert dispatched["project_root"] == project_root
+
+
+@pytest.mark.asyncio
+async def test_mission_manager_rejects_partial_project_scope(tmp_path: Path) -> None:
+    manager = MissionManager(tmp_path / "partial.db")
+    await manager.start()
+    try:
+        with pytest.raises(ValueError, match="project_id and project_root"):
+            await manager.dispatch(
+                prompt="bad scope",
+                language="en",
+                project_id="alpha",
+            )
+        with pytest.raises(ValueError, match="task_id requires project_id"):
+            await manager.dispatch(
+                prompt="bad task scope",
+                language="en",
+                task_id="N-13",
+            )
+    finally:
+        await manager.stop()
