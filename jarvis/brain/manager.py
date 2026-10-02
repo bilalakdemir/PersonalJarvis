@@ -157,6 +157,10 @@ _TURN_OVERRIDE: ContextVar[TurnOverride | None] = ContextVar(
     "jarvis.brain.manager.turn_override",
     default=None,
 )
+_PROJECT_EXECUTION_SCOPE: ContextVar[ProjectExecutionScope | None] = ContextVar(
+    "jarvis.brain.manager.project_execution_scope",
+    default=None,
+)
 
 
 class _SkillTurnState:
@@ -6542,7 +6546,6 @@ class BrainManager:
         user_text: str,
         *,
         trace_id: UUID | None = None,
-        project_scope: ProjectExecutionScope | None = None,
     ) -> str | None:
         """Dispatch an ``execution: mission`` skill as a worker brief (AD-S5).
 
@@ -6599,6 +6602,7 @@ class BrainManager:
             "target": "",
         }
         log.info("Mission skill dispatch: %s (%r)", name, user_text[:120])
+        project_scope = _PROJECT_EXECUTION_SCOPE.get()
         try:
             result = await self._tool_executor.execute(
                 tool,
@@ -10308,7 +10312,6 @@ class BrainManager:
         *,
         trace_id: UUID | None = None,
         source_layer: str | None = None,
-        project_scope: ProjectExecutionScope | None = None,
     ) -> str | None:
         """Starts ``spawn_worker`` deterministically, without LLM tool-choice.
 
@@ -10381,6 +10384,7 @@ class BrainManager:
             default=DEFAULT_LOCALE,
             conversation_language=self._conversation_language,
         )
+        project_scope = _PROJECT_EXECUTION_SCOPE.get()
         result = await self._tool_executor.execute(
             tool,
             args,
@@ -10471,10 +10475,20 @@ class BrainManager:
             default=DEFAULT_LOCALE,
             conversation_language=self._conversation_language,
         )
+        project_scope = _PROJECT_EXECUTION_SCOPE.get()
         result = await self._tool_executor.execute(
             tool, args, user_utterance=user_text,
             config_snapshot={"output_language": out_lang},
             trace_id=trace_id,
+            project_id=(
+                project_scope.project_id if project_scope is not None else None
+            ),
+            task_id=(
+                project_scope.task_id if project_scope is not None else None
+            ),
+            project_root=(
+                project_scope.project_root if project_scope is not None else None
+            ),
         )
         if not result.success:
             return await self._honest_failure_readback(
@@ -10529,8 +10543,21 @@ class BrainManager:
             "Recovered leaked %s tool-call from brain text "
             "(provider function-calling leak): %r", name, user_text[:160],
         )
+        project_scope = _PROJECT_EXECUTION_SCOPE.get()
         result = await self._tool_executor.execute(
-            tool, inp, user_utterance=user_text, trace_id=trace_id,
+            tool,
+            inp,
+            user_utterance=user_text,
+            trace_id=trace_id,
+            project_id=(
+                project_scope.project_id if project_scope is not None else None
+            ),
+            task_id=(
+                project_scope.task_id if project_scope is not None else None
+            ),
+            project_root=(
+                project_scope.project_root if project_scope is not None else None
+            ),
         )
         if not result.success:
             # A failed cli_<name> call carries the real cause in stderr; speak
@@ -11286,6 +11313,11 @@ class BrainManager:
             user_text=user_text,
             conversation_id=conversation_id,
         )
+        # Task-local bridge: keep long-standing overridable method signatures
+        # stable while making canonical project authority available to every
+        # mission/tool fast path in this turn. Each concurrent turn has its own
+        # ContextVar value; every new turn overwrites it, including with None.
+        _PROJECT_EXECUTION_SCOPE.set(project_scope)
 
         # Skill-aware routing guard (AD-S3): probe ONCE per turn, before any
         # fast path can grab the utterance. "starte die Morgenroutine" is an
@@ -11407,7 +11439,6 @@ class BrainManager:
             mission_reply = await self._maybe_dispatch_skill_mission(
                 user_text,
                 trace_id=turn_trace_id,
-                project_scope=project_scope,
             )
             if mission_reply is not None:
                 await self._record_response_side_effects(
@@ -11602,7 +11633,6 @@ class BrainManager:
                 user_text,
                 trace_id=turn_trace_id,
                 source_layer=source_layer,
-                project_scope=project_scope,
             )
         if forced_spawn is not None:
             # Bug fix 2026-04-30: history update also in the force-spawn path.
