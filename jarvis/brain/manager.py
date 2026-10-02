@@ -120,6 +120,7 @@ from .local_action_gate import _normalize as _gate_normalize
 from .mission_command_gate import match_mission_command
 from .persona_loader import load_effective_persona_prompt
 from .project_context import (
+    ProjectContextResolutionStatus,
     ProjectContextResolver,
     ProjectExecutionScope,
     ProjectTurnContext,
@@ -4697,17 +4698,25 @@ class BrainManager:
         *,
         user_text: str,
         conversation_id: str | None = None,
-    ) -> tuple[str, ProjectExecutionScope | None]:
-        """Resolve one canonical snapshot for both prompt context and execution."""
+    ) -> tuple[str, ProjectExecutionScope | None, bool]:
+        """Resolve one snapshot for prompt + execution, with a fail-closed gate."""
 
         if self._project_turn_context is None:
-            return "", None
+            return "", None, False
         try:
             resolution = self._project_turn_context.resolve_turn(
                 user_text,
                 conversation_id=conversation_id,
             )
-            return render_project_context(resolution), project_execution_scope(resolution)
+            delegation_blocked = resolution.status in {
+                ProjectContextResolutionStatus.AMBIGUOUS,
+                ProjectContextResolutionStatus.UNAVAILABLE,
+            }
+            return (
+                render_project_context(resolution),
+                project_execution_scope(resolution),
+                delegation_blocked,
+            )
         except Exception:  # noqa: BLE001 — project routing must not crash a turn
             log.exception("project context resolution failed unexpectedly")
             return (
@@ -4716,6 +4725,7 @@ class BrainManager:
                 "replace canonical project state from conversation history "
                 "or memory.",
                 None,
+                True,
             )
 
     def _build_project_turn_context(
@@ -4726,7 +4736,7 @@ class BrainManager:
     ) -> str:
         """Build N-12 structural project context for this user turn only."""
 
-        block, _scope = self._resolve_project_turn_context(
+        block, _scope, _delegation_blocked = self._resolve_project_turn_context(
             user_text=user_text,
             conversation_id=conversation_id,
         )
@@ -11311,7 +11321,11 @@ class BrainManager:
         # N-13: resolve canonical execution authority before any mission fast
         # path can dispatch. Ambiguous/unavailable state yields no scope and is
         # never repaired from memory or conversation history.
-        project_context, project_scope = self._resolve_project_turn_context(
+        (
+            project_context,
+            project_scope,
+            project_delegation_blocked,
+        ) = self._resolve_project_turn_context(
             user_text=user_text,
             conversation_id=conversation_id,
         )
@@ -11629,6 +11643,12 @@ class BrainManager:
             # A caller-picked turn (the typed chat) IS the worker in its folder:
             # the heuristic must not hand its work to a background mission. An
             # explicit "spawn an agent for this" still spawns.
+            forced_spawn = None
+        elif project_delegation_blocked:
+            log.warning(
+                "Force-spawn stood down: canonical project context is ambiguous "
+                "or unavailable; refusing unscoped delegation."
+            )
             forced_spawn = None
         else:
             forced_spawn = await self._force_spawn_worker(
@@ -12173,6 +12193,16 @@ class BrainManager:
                 _turn_tools = self._hide_spawn_on_knowledge_question(
                     _turn_tools, user_text
                 )
+            # N-13: ambiguous/unavailable canonical project state must never
+            # silently become an unscoped background mission. Keep the
+            # canonical context visible so the model can ask for clarification,
+            # but remove every spawn vehicle from this turn's tool surface.
+            if project_delegation_blocked and isinstance(_turn_tools, dict):
+                _turn_tools = {
+                    name: tool
+                    for name, tool in _turn_tools.items()
+                    if name not in _SPAWN_TOOL_NAMES
+                }
             # Signalless-turn action-hide (forensic 2026-06-27): inside a live
             # desktop episode a turn with NO actionable signal of its own ("Was
             # geht ab?" mis-heard as "Lask it up!" conf 0.509) must not reach
