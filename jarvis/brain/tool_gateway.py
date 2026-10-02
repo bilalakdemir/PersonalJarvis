@@ -192,6 +192,13 @@ class BrainSupervisorToolGateway:
                 "tool_origin": request.origin,
                 "mission_id": request.mission_id,
                 "worker_id": request.worker_id,
+                "project_id": request.project_id,
+                "task_id": request.task_id,
+                "grant_id": (
+                    getattr(request.capability_grant, "grant_id", None)
+                    if request.capability_grant is not None
+                    else None
+                ),
             }
         )
         return await executor.execute(
@@ -252,6 +259,13 @@ class BrainSupervisorToolGateway:
                 "tool_origin": request.origin,
                 "mission_id": request.mission_id,
                 "worker_id": request.worker_id,
+                "project_id": request.project_id,
+                "task_id": request.task_id,
+                "grant_id": (
+                    getattr(request.capability_grant, "grant_id", None)
+                    if request.capability_grant is not None
+                    else None
+                ),
             }
         )
         return await resume(

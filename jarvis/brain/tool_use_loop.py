@@ -638,6 +638,9 @@ class ToolUseLoop:
         deadline_s: float | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         tool_context: dict[str, Any] | None = None,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        project_root: str | None = None,
         loop_control: LoopControl | None = None,
     ) -> None:
         self._brain = brain
@@ -646,6 +649,9 @@ class ToolUseLoop:
         # Caller-supplied keys for every tool's ``ExecutionContext.config``
         # (see BrainDispatcher.tool_context). Per-turn keys set below win.
         self._tool_context = dict(tool_context or {})
+        self._project_id = project_id
+        self._task_id = task_id
+        self._project_root = project_root
         # A scheduled/background turn (BUG-212): an unknown tool name is fed
         # back and the loop continues — no listener to keep from silence.
         self._unattended = bool(self._tool_context.get("unattended"))
@@ -1489,6 +1495,13 @@ class ToolUseLoop:
                         reply_language, "unknown", user_utterance,
                         conversation_language=conversation_language,
                     )
+                    project_kwargs: dict[str, Any] = {}
+                    if self._project_id is not None:
+                        project_kwargs = {
+                            "project_id": self._project_id,
+                            "task_id": self._task_id,
+                            "project_root": self._project_root,
+                        }
                     result = await self._executor.execute(
                         tool, tool_args,
                         user_utterance=user_utterance,
@@ -1498,6 +1511,10 @@ class ToolUseLoop:
                             "voice_confirm": voice_confirm,
                         },
                         trace_id=tid,
+                        # Preserve the historical non-project executor call
+                        # signature; N-13 metadata is additive only when a
+                        # canonical project scope actually exists.
+                        **project_kwargs,
                         # Session-Decision-Log: the model's natural-language text
                         # emitted alongside this tool call IS the "why". Captured
                         # for free (no extra call); the executor redacts + caps it.

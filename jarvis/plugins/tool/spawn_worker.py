@@ -519,7 +519,11 @@ class SpawnWorkerTool:
     ) -> ToolResult:
         utterance = (args.get("utterance") or "").strip()
         if not utterance:
-            return ToolResult(success=False, error="empty utterance")
+            return ToolResult(success=False, output="", error="empty utterance")
+        if ctx.task_id is not None and ctx.project_id is None:
+            return ToolResult(success=False, output="", error="invalid project execution scope")
+        if (ctx.project_id is None) != (ctx.project_root is None):
+            return ToolResult(success=False, output="", error="invalid project execution scope")
 
         # Context-bleed guard (forensic 2026-06-20): under a full provider
         # collapse the turn ran on a degraded fallback model fed a long prior
@@ -699,6 +703,9 @@ class SpawnWorkerTool:
                     # renders itself must be in the same language the pipeline
                     # will wrap it in.
                     readback_language=ack_language,
+                    project_id=ctx.project_id,
+                    task_id=ctx.task_id,
+                    project_root=ctx.project_root,
                 ),
                 # NOTE: prefix "jarvis-agent-" is a live matching key, not a
                 # cosmetic label — jarvis/brain/manager.py
@@ -742,6 +749,9 @@ class SpawnWorkerTool:
         *,
         mission_language: str = "de",
         readback_language: str | None = None,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        project_root: str | None = None,
     ) -> None:
         """Laeuft im Background. Dispatched + executes eine Mission.
 
@@ -781,11 +791,18 @@ class SpawnWorkerTool:
         enden wuerde.
         """
         try:
-            mission_id = await manager.dispatch(
-                prompt=prompt,
-                language=mission_language,
-                source_actor="hauptjarvis",
-            )
+            dispatch_kwargs: dict[str, Any] = {
+                "prompt": prompt,
+                "language": mission_language,
+                "source_actor": "hauptjarvis",
+            }
+            if project_id is not None and project_root is not None:
+                dispatch_kwargs.update(
+                    project_id=project_id,
+                    task_id=task_id,
+                    project_root=project_root,
+                )
+            mission_id = await manager.dispatch(**dispatch_kwargs)
             if kontrollierer is None:
                 log.warning(
                     "spawn_worker: mission %s dispatched but no Kontrollierer "

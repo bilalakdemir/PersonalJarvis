@@ -48,6 +48,9 @@ class BrainDispatcher:
         deadline_s: float | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         tool_context: dict[str, Any] | None = None,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        project_root: str | None = None,
         loop_control: LoopControl | None = None,
     ) -> None:
         self._brain = brain
@@ -58,6 +61,9 @@ class BrainDispatcher:
         # scheduled task whose result is a written digest, not speech). The
         # loop's per-turn keys (output_language, voice_confirm) always win.
         self._tool_context = dict(tool_context or {})
+        self._project_id = project_id
+        self._task_id = task_id
+        self._project_root = project_root
         self._system_prompt = system_prompt
         self._max_turns = max_turns
         self._max_tokens_total = max_tokens_total
@@ -93,6 +99,9 @@ class BrainDispatcher:
             deadline_s=self._deadline_s,
             reasoning_effort=self._reasoning_effort,
             tool_context=self._tool_context,
+            project_id=self._project_id,
+            task_id=self._task_id,
+            project_root=self._project_root,
             loop_control=self._loop_control,
         )
 
@@ -162,6 +171,9 @@ class BrainDispatcher:
                 deadline_s=self._deadline_s,
                 reasoning_effort=self._reasoning_effort,
                 tool_context=self._tool_context,
+                project_id=self._project_id,
+                task_id=self._task_id,
+                project_root=self._project_root,
                 loop_control=self._loop_control,
             )
             return await loop.run(

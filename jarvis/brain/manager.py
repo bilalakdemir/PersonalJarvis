@@ -119,7 +119,14 @@ from .local_action_gate import (
 from .local_action_gate import _normalize as _gate_normalize
 from .mission_command_gate import match_mission_command
 from .persona_loader import load_effective_persona_prompt
-from .project_context import ProjectContextResolver, ProjectTurnContext
+from .project_context import (
+    ProjectContextResolutionStatus,
+    ProjectContextResolver,
+    ProjectExecutionScope,
+    ProjectTurnContext,
+    project_execution_scope,
+    render_project_context,
+)
 from .provider_registry import BrainProviderRegistry
 from .rate_limit_tracker import RateLimitTracker
 from .streaming import aggregate
@@ -151,6 +158,23 @@ _TURN_OVERRIDE: ContextVar[TurnOverride | None] = ContextVar(
     "jarvis.brain.manager.turn_override",
     default=None,
 )
+_PROJECT_EXECUTION_SCOPE: ContextVar[ProjectExecutionScope | None] = ContextVar(
+    "jarvis.brain.manager.project_execution_scope",
+    default=None,
+)
+
+
+def _project_execution_kwargs() -> dict[str, str | None]:
+    """Optional ToolExecutor kwargs; empty keeps non-project call signatures stable."""
+
+    scope = _PROJECT_EXECUTION_SCOPE.get()
+    if scope is None:
+        return {}
+    return {
+        "project_id": scope.project_id,
+        "task_id": scope.task_id,
+        "project_root": scope.project_root,
+    }
 
 
 class _SkillTurnState:
@@ -3691,6 +3715,9 @@ class BrainManager:
         reasoning_effort: ReasoningEffort | None = None,
         delegated_voice: bool = False,
         tool_context: dict[str, Any] | None = None,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        project_root: str | None = None,
         loop_control: Any = None,
     ) -> BrainDispatcher:
         """Builds the dispatcher with an optional tool override.
@@ -3753,6 +3780,9 @@ class BrainManager:
             deadline_s=deadline_s,
             reasoning_effort=reasoning_effort,
             tool_context=tool_context,
+            project_id=project_id,
+            task_id=task_id,
+            project_root=project_root,
             loop_control=loop_control,
             **kwargs,
         )
@@ -4676,6 +4706,41 @@ class BrainManager:
             parts.append(agentic_block)
         return "\n\n".join(p for p in parts if p)
 
+    def _resolve_project_turn_context(
+        self,
+        *,
+        user_text: str,
+        conversation_id: str | None = None,
+    ) -> tuple[str, ProjectExecutionScope | None, bool]:
+        """Resolve one snapshot for prompt + execution, with a fail-closed gate."""
+
+        if self._project_turn_context is None:
+            return "", None, False
+        try:
+            resolution = self._project_turn_context.resolve_turn(
+                user_text,
+                conversation_id=conversation_id,
+            )
+            delegation_blocked = resolution.status in {
+                ProjectContextResolutionStatus.AMBIGUOUS,
+                ProjectContextResolutionStatus.UNAVAILABLE,
+            }
+            return (
+                render_project_context(resolution),
+                project_execution_scope(resolution),
+                delegation_blocked,
+            )
+        except Exception:  # noqa: BLE001 — project routing must not crash a turn
+            log.exception("project context resolution failed unexpectedly")
+            return (
+                "[PROJECT CONTEXT — CANONICAL STATE UNAVAILABLE]\n"
+                "Project context resolution failed. Do not reconstruct or "
+                "replace canonical project state from conversation history "
+                "or memory.",
+                None,
+                True,
+            )
+
     def _build_project_turn_context(
         self,
         *,
@@ -4684,21 +4749,11 @@ class BrainManager:
     ) -> str:
         """Build N-12 structural project context for this user turn only."""
 
-        if self._project_turn_context is None:
-            return ""
-        try:
-            return self._project_turn_context.build_turn_block(
-                user_text,
-                conversation_id=conversation_id,
-            )
-        except Exception:  # noqa: BLE001 — project routing must not crash a turn
-            log.exception("project context resolution failed unexpectedly")
-            return (
-                "[PROJECT CONTEXT — CANONICAL STATE UNAVAILABLE]\n"
-                "Project context resolution failed. Do not reconstruct or "
-                "replace canonical project state from conversation history "
-                "or memory."
-            )
+        block, _scope, _delegation_blocked = self._resolve_project_turn_context(
+            user_text=user_text,
+            conversation_id=conversation_id,
+        )
+        return block
 
     def _agentic_focus_block(self) -> str:
         """Workspace-awareness block while the Agentic IDE's focus mode is on.
@@ -6510,7 +6565,10 @@ class BrainManager:
             log.debug("SkillInvoked publish failed", exc_info=True)
 
     async def _maybe_dispatch_skill_mission(
-        self, user_text: str, *, trace_id: UUID | None = None
+        self,
+        user_text: str,
+        *,
+        trace_id: UUID | None = None,
     ) -> str | None:
         """Dispatch an ``execution: mission`` skill as a worker brief (AD-S5).
 
@@ -6573,6 +6631,7 @@ class BrainManager:
                 args,
                 user_utterance=user_text,
                 trace_id=trace_id or uuid4(),
+                **_project_execution_kwargs(),
             )
         except Exception:  # noqa: BLE001
             log.warning("mission skill dispatch failed — inline fallback", exc_info=True)
@@ -10345,6 +10404,7 @@ class BrainManager:
             user_utterance=user_text,
             config_snapshot={"output_language": out_lang},
             trace_id=tid,
+            **_project_execution_kwargs(),
         )
         if not result.success:
             return await self._honest_failure_readback(
@@ -10424,6 +10484,7 @@ class BrainManager:
             tool, args, user_utterance=user_text,
             config_snapshot={"output_language": out_lang},
             trace_id=trace_id,
+            **_project_execution_kwargs(),
         )
         if not result.success:
             return await self._honest_failure_readback(
@@ -10479,7 +10540,11 @@ class BrainManager:
             "(provider function-calling leak): %r", name, user_text[:160],
         )
         result = await self._tool_executor.execute(
-            tool, inp, user_utterance=user_text, trace_id=trace_id,
+            tool,
+            inp,
+            user_utterance=user_text,
+            trace_id=trace_id,
+            **_project_execution_kwargs(),
         )
         if not result.success:
             # A failed cli_<name> call carries the real cause in stderr; speak
@@ -10916,6 +10981,7 @@ class BrainManager:
             tuple(history_override) if history_override is not None else None
         )
         override_token = _TURN_OVERRIDE.set(turn_override)
+        project_scope_token = _PROJECT_EXECUTION_SCOPE.set(None)
         skill_state = _SkillTurnState(self)
         skill_token = _SKILL_TURN_STATE.set(skill_state)
         try:
@@ -10944,6 +11010,7 @@ class BrainManager:
             self._skill_turn_source_fallback = skill_state.source
             self._skill_injected_inline_fallback = skill_state.injected_inline
             _SKILL_TURN_STATE.reset(skill_token)
+            _PROJECT_EXECUTION_SCOPE.reset(project_scope_token)
             _TURN_OVERRIDE.reset(override_token)
             _TURN_HISTORY_OVERRIDE.reset(history_token)
             _PUBLISH_RESPONSE_EVENT.reset(token)
@@ -11228,6 +11295,22 @@ class BrainManager:
         routing_text, contextual_tool_names = self._contextual_routing_state(
             user_text, use_history=use_history,
         )
+        # N-13: resolve canonical execution authority before any mission fast
+        # path can dispatch. Ambiguous/unavailable state yields no scope and is
+        # never repaired from memory or conversation history.
+        (
+            project_context,
+            project_scope,
+            project_delegation_blocked,
+        ) = self._resolve_project_turn_context(
+            user_text=user_text,
+            conversation_id=conversation_id,
+        )
+        # Task-local bridge: keep long-standing overridable method signatures
+        # stable while making canonical project authority available to every
+        # mission/tool fast path in this turn. Each concurrent turn has its own
+        # ContextVar value; every new turn overwrites it, including with None.
+        _PROJECT_EXECUTION_SCOPE.set(project_scope)
 
         # Skill-aware routing guard (AD-S3): probe ONCE per turn, before any
         # fast path can grab the utterance. "starte die Morgenroutine" is an
@@ -11344,11 +11427,27 @@ class BrainManager:
             )
             # AD-S5: mission skills never run inline — dispatch the worker
             # with the rendered instructions as the brief and return the
-            # optimistic ACK. Falls through to the inline path when the
-            # dispatch is not possible (AD-OE6: no silent drop).
-            mission_reply = await self._maybe_dispatch_skill_mission(
-                user_text, trace_id=turn_trace_id,
+            # optimistic ACK. N-13 adds one hard exception: ambiguous or
+            # unavailable canonical project context may not dispatch an
+            # unscoped mission, nor silently run a mission-only skill inline.
+            _skill_fm = getattr(self._skill_turn_match, "frontmatter", None)
+            _mission_skill = (
+                _skill_fm is not None
+                and getattr(_skill_fm, "execution", "inline") == "mission"
             )
+            if project_delegation_blocked and _mission_skill:
+                log.warning(
+                    "Mission skill %s stood down: canonical project context is "
+                    "ambiguous or unavailable; refusing unscoped delegation.",
+                    getattr(self._skill_turn_match, "name", "?"),
+                )
+                self._skill_turn_match = None
+                mission_reply = None
+            else:
+                mission_reply = await self._maybe_dispatch_skill_mission(
+                    user_text,
+                    trace_id=turn_trace_id,
+                )
             if mission_reply is not None:
                 await self._record_response_side_effects(
                     user_text=user_text,
@@ -11537,9 +11636,17 @@ class BrainManager:
             # the heuristic must not hand its work to a background mission. An
             # explicit "spawn an agent for this" still spawns.
             forced_spawn = None
+        elif project_delegation_blocked:
+            log.warning(
+                "Force-spawn stood down: canonical project context is ambiguous "
+                "or unavailable; refusing unscoped delegation."
+            )
+            forced_spawn = None
         else:
             forced_spawn = await self._force_spawn_worker(
-                user_text, trace_id=turn_trace_id, source_layer=source_layer,
+                user_text,
+                trace_id=turn_trace_id,
+                source_layer=source_layer,
             )
         if forced_spawn is not None:
             # Bug fix 2026-04-30: history update also in the force-spawn path.
@@ -11874,10 +11981,6 @@ class BrainManager:
         # message (keeping the cached system prompt stable); empty in legacy
         # mode. Reused for every provider in the fallback chain below.
         turn_context = self._build_turn_context()
-        project_context = self._build_project_turn_context(
-            user_text=user_text,
-            conversation_id=conversation_id,
-        )
         if project_context:
             turn_context = (
                 f"{turn_context}\n\n{project_context}"
@@ -12082,6 +12185,16 @@ class BrainManager:
                 _turn_tools = self._hide_spawn_on_knowledge_question(
                     _turn_tools, user_text
                 )
+            # N-13: ambiguous/unavailable canonical project state must never
+            # silently become an unscoped background mission. Keep the
+            # canonical context visible so the model can ask for clarification,
+            # but remove every spawn vehicle from this turn's tool surface.
+            if project_delegation_blocked and isinstance(_turn_tools, dict):
+                _turn_tools = {
+                    name: tool
+                    for name, tool in _turn_tools.items()
+                    if name not in _SPAWN_TOOL_NAMES
+                }
             # Signalless-turn action-hide (forensic 2026-06-27): inside a live
             # desktop episode a turn with NO actionable signal of its own ("Was
             # geht ab?" mis-heard as "Lask it up!" conf 0.509) must not reach
@@ -12215,6 +12328,12 @@ class BrainManager:
                 if prefer_tool_model
                 else self._override_dispatch_kwargs(turn_override)
             )
+            if project_scope is not None:
+                _disp_kwargs.update(
+                    project_id=project_scope.project_id,
+                    task_id=project_scope.task_id,
+                    project_root=project_scope.project_root,
+                )
             disp = self._build_dispatcher(
                 brain, tools_override=_turn_tools, **_disp_kwargs
             )
