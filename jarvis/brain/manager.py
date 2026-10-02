@@ -10994,6 +10994,7 @@ class BrainManager:
             tuple(history_override) if history_override is not None else None
         )
         override_token = _TURN_OVERRIDE.set(turn_override)
+        project_scope_token = _PROJECT_EXECUTION_SCOPE.set(None)
         skill_state = _SkillTurnState(self)
         skill_token = _SKILL_TURN_STATE.set(skill_state)
         try:
@@ -11022,6 +11023,7 @@ class BrainManager:
             self._skill_turn_source_fallback = skill_state.source
             self._skill_injected_inline_fallback = skill_state.injected_inline
             _SKILL_TURN_STATE.reset(skill_token)
+            _PROJECT_EXECUTION_SCOPE.reset(project_scope_token)
             _TURN_OVERRIDE.reset(override_token)
             _TURN_HISTORY_OVERRIDE.reset(history_token)
             _PUBLISH_RESPONSE_EVENT.reset(token)
