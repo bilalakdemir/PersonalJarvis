@@ -88,6 +88,17 @@ class FakeWorker:
         yield _FakeWorkerEvent(cost_usd=self._cost, total_tokens=self._tokens, session_id=self._session)
 
 
+class _FailIfBoundInventory:
+    def __init__(self) -> None:
+        self.bind_calls = 0
+
+    def bind_broker(self, **_kwargs: Any) -> Any:
+        self.bind_calls += 1
+        raise AssertionError(
+            "project-scope lookup failure must not issue an unscoped broker grant"
+        )
+
+
 class FakeCriticRunner:
     """Critic stub: returns hardcoded verdicts in order."""
 
@@ -250,6 +261,45 @@ async def test_happy_path_iteration_0_approves(
     assert view is not None
     assert view.state == MissionState.APPROVED
     assert len(critic.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_project_scope_lookup_failure_disables_supervisor_broker(
+    manager: MissionManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "alpha"
+    project_root.mkdir()
+    mission_id = await manager.dispatch(
+        prompt="perform project work",
+        project_id="alpha",
+        task_id="N-13",
+        project_root=str(project_root),
+    )
+
+    async def _broken_project_scope(_mission_id: str) -> Any:
+        raise RuntimeError("project scope store unavailable")
+
+    monkeypatch.setattr(manager, "project_scope", _broken_project_scope)
+
+    inventory = _FailIfBoundInventory()
+    worker = FakeWorker()
+    worker.capability_inventory = inventory  # type: ignore[attr-defined]
+
+    critic = FakeCriticRunner(_make_approve_verdict())
+    kontrollierer = _make_kontrollierer(
+        manager=manager,
+        tmp_path=tmp_path,
+        critic=critic,
+        worker_factory_fn=lambda _step: worker,
+    )
+
+    state = await kontrollierer.run_mission(mission_id)
+
+    assert state == MissionState.APPROVED
+    assert inventory.bind_calls == 0
+    assert worker.spawn_calls[0]["_broker_binding"].available is False
 
 
 @pytest.mark.asyncio
