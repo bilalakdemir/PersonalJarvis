@@ -119,6 +119,7 @@ from .local_action_gate import (
 from .local_action_gate import _normalize as _gate_normalize
 from .mission_command_gate import match_mission_command
 from .persona_loader import load_effective_persona_prompt
+from .project_context import ProjectContextResolver, ProjectTurnContext
 from .provider_registry import BrainProviderRegistry
 from .rate_limit_tracker import RateLimitTracker
 from .streaming import aggregate
@@ -2748,6 +2749,7 @@ class BrainManager:
         wiki_injector: "WikiContextInjector | None" = None,  # noqa: UP037
         contacts: Any = None,
         readback_composer: "ReadbackComposer | None" = None,  # noqa: UP037
+        project_context_resolver: ProjectContextResolver | None = None,
     ) -> None:
         self._config = config
         self._bus = bus
@@ -2816,6 +2818,15 @@ class BrainManager:
         # Per-turn wiki context suffix; set in generate() and consumed by
         # _build_system_prompt().  Reset to "" after each turn.
         self._wiki_context_suffix: str = ""
+        # N-12: optional structural project routing. Disabled when no managed-
+        # project registry is configured, preserving ordinary/non-project turns.
+        # The conversation map stores only project identity as a routing hint;
+        # canonical state is reloaded from disk on every resolved turn.
+        self._project_turn_context: ProjectTurnContext | None = (
+            ProjectTurnContext(project_context_resolver)
+            if project_context_resolver is not None
+            else None
+        )
         # Per-turn detected language (de/en/es or "" when ambiguous/pinned),
         # set at the top of generate(); consumed by _reply_language_directive()
         # in auto mode to hard-pin the turn's language so a tool-synthesis turn
@@ -3798,6 +3809,13 @@ class BrainManager:
         except Exception:  # noqa: BLE001 — the context block is a nicety
             log.debug("render_surface_prompt: turn context skipped", exc_info=True)
             turn_context = ""
+        project_context = self._build_project_turn_context(user_text=user_text)
+        if project_context:
+            turn_context = (
+                f"{turn_context}\n\n{project_context}"
+                if turn_context
+                else project_context
+            )
         return prompt, turn_context
 
     def _build_tool_ack_emitter(
@@ -4639,21 +4657,12 @@ class BrainManager:
             return ""
         from datetime import datetime
 
-        # Deterministic English weekday. ``strftime('%A')`` renders the weekday
-        # name in the process locale ("Freitag" on German Windows, "vendredi" on
-        # French, a CJK string on a Chinese host), leaking a machine-locale,
-        # often non-English token into the LLM context. Index a fixed English
-        # tuple by ``weekday()`` (0=Monday) so the label reads the same English on
-        # every OS. The date is ISO-8601 (unambiguous internationally, unlike a
-        # dotted d.m.Y); wall-clock time stays local (``datetime.now``).
         _weekdays_en = (
             "Monday", "Tuesday", "Wednesday", "Thursday",
             "Friday", "Saturday", "Sunday",
         )
         _now = datetime.now()
         parts: list[str] = [
-            # Date/time belongs per-turn, never in the cached prefix (also fixes
-            # the missing BUG-005 date injection).
             f"[Current date and time: {_weekdays_en[_now.weekday()]}, "
             f"{_now.strftime('%Y-%m-%d %H:%M')}]"
         ]
@@ -4666,6 +4675,30 @@ class BrainManager:
         if agentic_block:
             parts.append(agentic_block)
         return "\n\n".join(p for p in parts if p)
+
+    def _build_project_turn_context(
+        self,
+        *,
+        user_text: str,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Build N-12 structural project context for this user turn only."""
+
+        if self._project_turn_context is None:
+            return ""
+        try:
+            return self._project_turn_context.build_turn_block(
+                user_text,
+                conversation_id=conversation_id,
+            )
+        except Exception:  # noqa: BLE001 — project routing must not crash a turn
+            log.exception("project context resolution failed unexpectedly")
+            return (
+                "[PROJECT CONTEXT — CANONICAL STATE UNAVAILABLE]\n"
+                "Project context resolution failed. Do not reconstruct or "
+                "replace canonical project state from conversation history "
+                "or memory."
+            )
 
     def _agentic_focus_block(self) -> str:
         """Workspace-awareness block while the Agentic IDE's focus mode is on.
@@ -11841,6 +11874,16 @@ class BrainManager:
         # message (keeping the cached system prompt stable); empty in legacy
         # mode. Reused for every provider in the fallback chain below.
         turn_context = self._build_turn_context()
+        project_context = self._build_project_turn_context(
+            user_text=user_text,
+            conversation_id=conversation_id,
+        )
+        if project_context:
+            turn_context = (
+                f"{turn_context}\n\n{project_context}"
+                if turn_context
+                else project_context
+            )
         if screen_context.note:
             turn_context = (
                 f"{turn_context}\n\n{screen_context.note}"
