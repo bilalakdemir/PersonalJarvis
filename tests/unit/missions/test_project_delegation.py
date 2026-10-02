@@ -354,3 +354,30 @@ async def test_project_correlation_reaches_supervisor_executor(
     finally:
         binding.close()
         runtime_refs._reset_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_spawn_worker_rejects_partial_project_execution_scope(tmp_path: Path) -> None:
+    manager = _RecordingManager()
+    tool = SpawnWorkerTool(
+        bus=EventBus(),
+        manager=manager,
+        kontrollierer=_Kontrollierer(),
+    )
+    bad_ctx = ExecutionContext(
+        trace_id=uuid4(),
+        user_utterance="delegate this",
+        config={"output_language": "en"},
+        memory_read=None,
+        project_id="alpha",
+        project_root=None,
+    )
+
+    result = await tool.execute(
+        {"utterance": "delegate this", "language": "en"},
+        bad_ctx,
+    )
+
+    assert result.success is False
+    assert "invalid project execution scope" in str(result.error)
+    assert manager.dispatches == []
