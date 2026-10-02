@@ -1889,33 +1889,11 @@ class MemoryConfig(BaseModel):
     # jarvis/memory/. Default to the sqlite store so a fresh install does not
     # point the archival tier at a backend that no longer exists.
     archival_store: str = "sqlite"
-
-    # Governed-memory retention defaults. The legacy retention_days_recall key
-    # remains a validation alias so existing jarvis.toml files keep loading.
-    conversation_retention_days: int = Field(
-        default=30,
-        ge=1,
-        le=3650,
-        validation_alias=AliasChoices(
-            "conversation_retention_days",
-            "retention_days_recall",
-        ),
-    )
-    temporary_memory_retention_days: int = Field(default=30, ge=1, le=3650)
-    candidate_retention_days: int = Field(default=30, ge=1, le=3650)
-    promotion_approval_retention_days: int = Field(default=30, ge=1, le=3650)
-    pre_expiry_review_hours: int = Field(default=24, ge=1, le=24 * 30)
-    active_context_idle_hours: int = Field(default=24, ge=1, le=24 * 30)
-
+    retention_days_recall: int = 90
     data_dir: str = "./data"
     wiki: WikiMemoryConfig = Field(default_factory=WikiMemoryConfig)
     legacy_curator: LegacyCuratorConfig = Field(default_factory=LegacyCuratorConfig)
     learning: JarvisLearningConfig = Field(default_factory=JarvisLearningConfig)
-
-    @property
-    def retention_days_recall(self) -> int:
-        """Compatibility view for callers using the pre-N14 field name."""
-        return self.conversation_retention_days
 
 
 class SafetyWhitelistConfig(BaseModel):
