@@ -11450,12 +11450,27 @@ class BrainManager:
             )
             # AD-S5: mission skills never run inline — dispatch the worker
             # with the rendered instructions as the brief and return the
-            # optimistic ACK. Falls through to the inline path when the
-            # dispatch is not possible (AD-OE6: no silent drop).
-            mission_reply = await self._maybe_dispatch_skill_mission(
-                user_text,
-                trace_id=turn_trace_id,
+            # optimistic ACK. N-13 adds one hard exception: ambiguous or
+            # unavailable canonical project context may not dispatch an
+            # unscoped mission, nor silently run a mission-only skill inline.
+            _skill_fm = getattr(self._skill_turn_match, "frontmatter", None)
+            _mission_skill = (
+                _skill_fm is not None
+                and getattr(_skill_fm, "execution", "inline") == "mission"
             )
+            if project_delegation_blocked and _mission_skill:
+                log.warning(
+                    "Mission skill %s stood down: canonical project context is "
+                    "ambiguous or unavailable; refusing unscoped delegation.",
+                    getattr(self._skill_turn_match, "name", "?"),
+                )
+                self._skill_turn_match = None
+                mission_reply = None
+            else:
+                mission_reply = await self._maybe_dispatch_skill_mission(
+                    user_text,
+                    trace_id=turn_trace_id,
+                )
             if mission_reply is not None:
                 await self._record_response_side_effects(
                     user_text=user_text,
