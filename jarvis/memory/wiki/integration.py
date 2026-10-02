@@ -135,6 +135,10 @@ class WikiIntegrationHandle:
     # Wave-2: the Stage-1 candidate journal (SQLite). Closed on shutdown so
     # the connection does not leak across test bootstraps.
     _journal: Any = field(default=None)
+    _promotion_queue: Any = field(default=None)
+    _promotion_queue_cleanup: Callable[[], Awaitable[None]] | None = field(
+        default=None
+    )
     # Contact → person-page mirror: detach callback (notify sink + bus
     # subscription) and the boot reconciliation task.
     _contact_mirror_cleanup: Callable[[], None] | None = field(default=None)
@@ -233,6 +237,20 @@ class WikiIntegrationHandle:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110
                 pass
         self._telemetry_task = None
+
+        # Detach and close the durable promotion queue after Stage-2
+        # producers are stopped, but before closing the shared SQLite-backed
+        # Stage-1 journal.
+        if self._promotion_queue_cleanup is not None:
+            try:
+                await self._promotion_queue_cleanup()
+            except Exception:  # noqa: BLE001
+                log.debug(
+                    "wiki_integration: promotion queue cleanup failed",
+                    exc_info=True,
+                )
+            self._promotion_queue_cleanup = None
+            self._promotion_queue = None
 
         # Close Stage 1 only after every producer and Stage-2 drain is stopped.
         if self._journal is not None:
@@ -466,6 +484,7 @@ async def bootstrap_wiki_integration(
     # (extractor=None) so the conversation->wiki path never goes dark.
     extractor = None
     journal = None
+    db_path: Path | None = None
     try:
         extractor_cfg = root_cfg.memory.wiki.extractor
         if bool(getattr(extractor_cfg, "enabled", True)):
@@ -521,6 +540,36 @@ async def bootstrap_wiki_integration(
             "falling back to the legacy direct curator ingest", exc,
         )
 
+    # N-14E: attach the durable promotion queue before Stage-2 can drain
+    # any backlog. If this fails, project candidates remain pending rather
+    # than publishing a route event that nobody can durably record.
+    promotion_queue = None
+    if journal is not None and scheduler is not None and db_path is not None:
+        try:
+            from jarvis.memory.promotion_queue import (
+                attach_project_state_route_queue,
+            )
+
+            promotion_queue, promotion_queue_cleanup = (
+                await attach_project_state_route_queue(
+                    bus=bus,
+                    db_path=db_path,
+                )
+            )
+            handle._promotion_queue = promotion_queue  # noqa: SLF001
+            handle._promotion_queue_cleanup = (  # noqa: SLF001
+                promotion_queue_cleanup
+            )
+            log.info(
+                "wiki_integration: durable memory promotion queue attached"
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "wiki_integration: memory promotion queue unavailable "
+                "(%s) — project candidates remain pending",
+                exc,
+            )
+
     # Wave-2 Stage 2: body-aware consolidator, drained via the scheduler's
     # JOURNAL trigger; refreshes the self-documentation page after each run.
     capture_ready = False
@@ -552,8 +601,16 @@ async def bootstrap_wiki_integration(
                 search=consolidator_search,
                 vault_root=vault_path,
                 on_run_complete=_refresh_self_doc,
-                project_resolver=ProjectContextResolver(),
-                event_publisher=bus,
+                project_resolver=(
+                    ProjectContextResolver()
+                    if promotion_queue is not None
+                    else None
+                ),
+                event_publisher=(
+                    bus
+                    if promotion_queue is not None
+                    else None
+                ),
             )
             scheduler.attach_consolidator(consolidator)
             capture_ready = True
