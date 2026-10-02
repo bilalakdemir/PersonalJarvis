@@ -111,8 +111,8 @@ class TemporaryMemoryStore:
         if contains_secret(safe_content):
             raise ValueError("temporary memory content contains secret-shaped data")
 
-        safe_source = _bounded(source, "source", _MAX_SOURCE_CHARS)
-        safe_kind = _bounded(kind, "kind", _MAX_KIND_CHARS)
+        safe_source = _bounded_nonsecret(source, "source", _MAX_SOURCE_CHARS)
+        safe_kind = _bounded_nonsecret(kind, "kind", _MAX_KIND_CHARS)
         safe_project_id = _optional_bounded(
             project_id, "project_id", _MAX_PROJECT_ID_CHARS
         )
@@ -226,6 +226,8 @@ class TemporaryMemoryStore:
 def _row_to_item(row: aiosqlite.Row) -> TemporaryMemoryItem:
     try:
         raw_refs = json.loads(str(row["evidence_json"] or "[]"))
+        if not isinstance(raw_refs, list):
+            raise TypeError("evidence_json must decode to a list")
     except (json.JSONDecodeError, TypeError, ValueError):
         log.warning(
             "TemporaryMemoryStore: invalid evidence_json for item %s; "
@@ -260,6 +262,13 @@ def _bounded(value: str, field: str, max_chars: int) -> str:
         raise ValueError(f"{field} must not be empty")
     if len(text) > max_chars:
         raise ValueError(f"{field} exceeds {max_chars} characters")
+    return text
+
+
+def _bounded_nonsecret(value: str, field: str, max_chars: int) -> str:
+    text = _bounded(value, field, max_chars)
+    if contains_secret(text):
+        raise ValueError(f"{field} contains secret-shaped data")
     return text
 
 
