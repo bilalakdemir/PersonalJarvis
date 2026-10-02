@@ -7,7 +7,11 @@ import pytest
 
 from jarvis.brain.dispatcher import BrainDispatcher
 from jarvis.brain.manager import BrainManager, _PROJECT_EXECUTION_SCOPE
-from jarvis.brain.project_context import ProjectExecutionScope
+from jarvis.brain.project_context import (
+    ProjectContextResolution,
+    ProjectContextResolutionStatus,
+    ProjectExecutionScope,
+)
 from jarvis.brain.tool_use_loop import ToolUseLoop
 from jarvis.core.protocols import BrainDelta, BrainRequest, ToolResult
 
@@ -115,3 +119,41 @@ async def test_generate_resets_project_execution_scope_after_turn(
 
     assert await manager.generate("project turn") == "ok"
     assert _PROJECT_EXECUTION_SCOPE.get() is before
+
+
+class _ResolutionOnlyTurnContext:
+    def __init__(self, resolution: ProjectContextResolution) -> None:
+        self._resolution = resolution
+
+    def resolve_turn(self, *_args: Any, **_kwargs: Any) -> ProjectContextResolution:
+        return self._resolution
+
+
+def test_ambiguous_project_resolution_blocks_delegation() -> None:
+    manager = BrainManager.__new__(BrainManager)
+    manager._project_turn_context = _ResolutionOnlyTurnContext(
+        ProjectContextResolution(status=ProjectContextResolutionStatus.AMBIGUOUS)
+    )
+
+    block, scope, blocked = manager._resolve_project_turn_context(
+        user_text="compare alpha and beta"
+    )
+
+    assert scope is None
+    assert blocked is True
+    assert "[PROJECT CONTEXT — AMBIGUOUS]" in block
+
+
+def test_no_project_resolution_does_not_block_non_project_delegation() -> None:
+    manager = BrainManager.__new__(BrainManager)
+    manager._project_turn_context = _ResolutionOnlyTurnContext(
+        ProjectContextResolution(status=ProjectContextResolutionStatus.NO_PROJECT)
+    )
+
+    block, scope, blocked = manager._resolve_project_turn_context(
+        user_text="research this unrelated topic"
+    )
+
+    assert block == ""
+    assert scope is None
+    assert blocked is False
