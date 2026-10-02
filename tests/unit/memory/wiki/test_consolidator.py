@@ -21,6 +21,13 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from jarvis.brain.project_context import (
+    ProjectContextResolution,
+    ProjectContextResolutionStatus,
+)
+from jarvis.core.project_state_events import ProjectStateMemoryProposalRequested
+from jarvis.projects.models import ProjectContextSnapshot
+
 from jarvis.core.config import (
     BrainConfig,
     BrainProviderConfig,
@@ -160,6 +167,55 @@ class FakeRegistry:
 
     def available(self) -> set[str]:
         return {"gemini"}
+
+
+class FakeEventPublisher:
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+
+    async def publish(self, event: Any) -> None:
+        self.events.append(event)
+
+
+class FakeProjectResolver:
+    def __init__(self, *, resolve_project: bool) -> None:
+        self._resolve_project = resolve_project
+        self.calls: list[tuple[str, str | None]] = []
+
+    def resolve(
+        self,
+        user_text: str,
+        *,
+        explicit_project: str | None = None,
+        active_project_id: str | None = None,
+        continuation: bool = False,
+    ) -> ProjectContextResolution:
+        del active_project_id, continuation
+        self.calls.append((user_text, explicit_project))
+        if self._resolve_project and explicit_project == "personal-jarvis":
+            snapshot = ProjectContextSnapshot(
+                project_id="personal-jarvis",
+                project_name="Personal Jarvis",
+                root_path=Path("/tmp/personal-jarvis"),
+                main_goal="Build the core Jarvis safely.",
+                phase="Core Implementation",
+                current_task="N-14 — Governed Memory Layer",
+                last_completed="N-13 — Project-Scoped Delegation Bridge",
+                next_step="Complete governed memory.",
+                blockers="None.",
+                active_decisions=(),
+                relevant_backlog_items=(),
+                state_revision="a" * 64,
+            )
+            return ProjectContextResolution(
+                status=ProjectContextResolutionStatus.RESOLVED,
+                snapshot=snapshot,
+                project_id=snapshot.project_id,
+                matched_by="explicit",
+            )
+        return ProjectContextResolution(
+            status=ProjectContextResolutionStatus.NO_PROJECT,
+        )
 
 
 class ScriptedProviderRegistry:
@@ -395,6 +451,90 @@ async def test_project_candidate_is_deferred_before_wiki_judge(stack) -> None:
     label = await _consolidator(stack, brain).run_once()
 
     assert label == "journal-deferred:1"
+    assert brain.received_requests == []
+    assert len(journal.pending()) == 1
+
+
+@pytest.mark.asyncio
+async def test_project_candidate_routes_canonical_proposal_request_once(
+    stack,
+) -> None:
+    _vault_root, _curator, journal = stack
+    journal.append(
+        [
+            CandidateFact(
+                fact="The current milestone is complete.",
+                kind="project",
+                subjects=("personal-jarvis",),
+                basis="explicit",
+            )
+        ],
+        source_label="realtime:project-route",
+        turn_hash="project-route",
+    )
+    candidate_id = journal.pending()[0].id
+
+    publisher = FakeEventPublisher()
+    resolver = FakeProjectResolver(resolve_project=True)
+    brain = FakeBrain([])
+    consolidator = _consolidator(
+        stack,
+        brain,
+        project_resolver=resolver,
+        event_publisher=publisher,
+    )
+
+    label = await consolidator.run_once()
+
+    assert label == "journal-deferred:1"
+    assert brain.received_requests == []
+    assert len(publisher.events) == 1
+    event = publisher.events[0]
+    assert isinstance(event, ProjectStateMemoryProposalRequested)
+    assert event.project_id == "personal-jarvis"
+    assert event.candidate_id == candidate_id
+    assert event.source_state_revision == "a" * 64
+    assert event.current_task == "N-14 — Governed Memory Layer"
+    assert event.relation == "execution-status"
+    assert len(journal.pending()) == 1
+
+    second_label = await consolidator.run_once()
+
+    assert second_label == "journal-deferred:1"
+    assert len(publisher.events) == 1
+    assert brain.received_requests == []
+
+
+@pytest.mark.asyncio
+async def test_unresolved_project_candidate_does_not_publish_proposal_request(
+    stack,
+) -> None:
+    _vault_root, _curator, journal = stack
+    journal.append(
+        [
+            CandidateFact(
+                fact="The current milestone is complete.",
+                kind="project",
+                subjects=("unknown-project",),
+                basis="explicit",
+            )
+        ],
+        source_label="realtime:project-unresolved",
+        turn_hash="project-unresolved",
+    )
+
+    publisher = FakeEventPublisher()
+    resolver = FakeProjectResolver(resolve_project=False)
+    brain = FakeBrain([])
+    label = await _consolidator(
+        stack,
+        brain,
+        project_resolver=resolver,
+        event_publisher=publisher,
+    ).run_once()
+
+    assert label == "journal-deferred:1"
+    assert publisher.events == []
     assert brain.received_requests == []
     assert len(journal.pending()) == 1
 
