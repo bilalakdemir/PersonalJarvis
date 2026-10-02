@@ -157,3 +157,29 @@ def test_no_project_resolution_does_not_block_non_project_delegation() -> None:
     assert block == ""
     assert scope is None
     assert blocked is False
+
+
+class _LegacyExecutor:
+    async def execute(
+        self,
+        _tool: Any,
+        _args: dict[str, Any],
+        *,
+        user_utterance: str,
+        config_snapshot: dict[str, Any],
+        trace_id: Any,
+        rationale: str,
+    ) -> ToolResult:
+        return ToolResult(success=True, output="ok")
+
+
+@pytest.mark.asyncio
+async def test_non_project_tool_loop_keeps_existing_executor_call_shape() -> None:
+    brain = _ToolBrain()
+    loop = ToolUseLoop(
+        brain,
+        {"wiki-list": _ReadTool()},
+        _LegacyExecutor(),  # type: ignore[arg-type]
+    )
+    result = await loop.run([], user_utterance="list notes")
+    assert result.text == "done"
