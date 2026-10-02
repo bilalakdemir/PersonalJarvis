@@ -108,6 +108,45 @@ async def test_secret_shaped_content_is_rejected_before_write(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_secret_shaped_metadata_is_rejected_before_write(tmp_path: Path) -> None:
+    store = TemporaryMemoryStore(tmp_path / "jarvis.db")
+
+    with pytest.raises(ValueError, match="source contains secret-shaped"):
+        await store.put(
+            content="Safe temporary note.",
+            source="sk-proj-" + ("b" * 30),
+            kind="note",
+            retention_days=30,
+        )
+
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_invalid_evidence_json_shape_degrades_to_empty_refs(tmp_path: Path) -> None:
+    db_path = tmp_path / "jarvis.db"
+
+    async with TemporaryMemoryStore(db_path) as store:
+        item_id = await store.put(
+            content="Safe temporary note.",
+            source="research",
+            kind="note",
+            retention_days=30,
+            evidence_refs=("source:one",),
+        )
+        conn = await store._ensure_open()  # noqa: SLF001 - corruption probe
+        await conn.execute(
+            "UPDATE temporary_memory SET evidence_json = ? WHERE id = ?",
+            ('{"unexpected":"object"}', item_id),
+        )
+
+        item = await store.get(item_id)
+
+    assert item is not None
+    assert item.evidence_refs == ()
+
+
+@pytest.mark.asyncio
 async def test_reopen_is_idempotent_and_keeps_existing_rows(tmp_path: Path) -> None:
     db_path = tmp_path / "jarvis.db"
 
