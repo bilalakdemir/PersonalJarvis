@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,7 @@ from .promotion_queue import MemoryPromotionQueue
 from .wiki.journal import CandidateJournal
 
 SCHEMA_FILE = Path(__file__).parent / "schema.sql"
+log = logging.getLogger(__name__)
 
 ProjectStateProposalStatus = Literal[
     "awaiting-approval",
@@ -911,7 +913,11 @@ def _recover_committed_transaction(
         return None
     try:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+        log.debug(
+            "Project-state committed-manifest recovery unavailable: %s",
+            exc,
+        )
         return None
     if (
         payload.get("status") != "COMMITTED"
