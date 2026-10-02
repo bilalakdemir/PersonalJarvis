@@ -1495,6 +1495,13 @@ class ToolUseLoop:
                         reply_language, "unknown", user_utterance,
                         conversation_language=conversation_language,
                     )
+                    project_kwargs: dict[str, Any] = {}
+                    if self._project_id is not None:
+                        project_kwargs = {
+                            "project_id": self._project_id,
+                            "task_id": self._task_id,
+                            "project_root": self._project_root,
+                        }
                     result = await self._executor.execute(
                         tool, tool_args,
                         user_utterance=user_utterance,
@@ -1504,9 +1511,10 @@ class ToolUseLoop:
                             "voice_confirm": voice_confirm,
                         },
                         trace_id=tid,
-                        project_id=self._project_id,
-                        task_id=self._task_id,
-                        project_root=self._project_root,
+                        # Preserve the historical non-project executor call
+                        # signature; N-13 metadata is additive only when a
+                        # canonical project scope actually exists.
+                        **project_kwargs,
                         # Session-Decision-Log: the model's natural-language text
                         # emitted alongside this tool call IS the "why". Captured
                         # for free (no extra call); the executor redacts + caps it.
