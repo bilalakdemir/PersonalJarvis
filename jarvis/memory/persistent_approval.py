@@ -7,8 +7,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
-from uuid import UUID, uuid4
-
 import aiosqlite
 
 from jarvis.core.memory_events import (
