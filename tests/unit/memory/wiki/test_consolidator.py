@@ -455,7 +455,7 @@ async def test_project_candidate_is_deferred_before_wiki_judge(stack) -> None:
 
 
 @pytest.mark.asyncio
-async def test_project_candidate_routes_canonical_proposal_request_once(
+async def test_project_candidate_republishes_route_for_durable_queue_dedupe(
     stack,
 ) -> None:
     _vault_root, _curator, journal = stack
@@ -500,7 +500,7 @@ async def test_project_candidate_routes_canonical_proposal_request_once(
     second_label = await consolidator.run_once()
 
     assert second_label == "journal-deferred:1"
-    assert len(publisher.events) == 1
+    assert len(publisher.events) == 2
     assert brain.received_requests == []
 
 

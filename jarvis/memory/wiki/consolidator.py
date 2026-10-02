@@ -231,7 +231,6 @@ class Consolidator:
         self._memory_gate = MemoryPromotionGate()
         self._project_resolver = project_resolver
         self._event_publisher = event_publisher
-        self._project_route_ids: set[int] = set()
         # Optional callback fired after a completed run (B7 wires the
         # self-documentation refresh here). Called best-effort.
         self._on_run_complete = on_run_complete
@@ -406,9 +405,6 @@ class Consolidator:
         ):
             return False
 
-        if row.id in self._project_route_ids:
-            return True
-
         snapshot = resolution.snapshot
         try:
             await self._event_publisher.publish(
@@ -430,7 +426,6 @@ class Consolidator:
             )
             return False
 
-        self._project_route_ids.add(row.id)
         telemetry.inc("wiki_governance_project_routed")
         return True
 
