@@ -257,10 +257,10 @@ def test_high_confidence_match_is_unique_and_deterministic(tmp_path: Path) -> No
     resolver = ProjectContextResolver(registry)
 
     first = resolver.resolve(
-        "For revenue, continue the engine work on alpha priorities."
+        "For revenue, continue the engine work on priorities."
     )
     second = resolver.resolve(
-        "For revenue, continue the engine work on alpha priorities."
+        "For revenue, continue the engine work on priorities."
     )
 
     assert first.status is ProjectContextResolutionStatus.RESOLVED
