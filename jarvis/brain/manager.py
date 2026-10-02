@@ -119,7 +119,12 @@ from .local_action_gate import (
 from .local_action_gate import _normalize as _gate_normalize
 from .mission_command_gate import match_mission_command
 from .persona_loader import load_effective_persona_prompt
-from .project_context import ProjectContextResolver, ProjectTurnContext
+from .project_context import (
+    ProjectContextResolver,
+    ProjectExecutionScope,
+    ProjectTurnContext,
+    project_execution_scope,
+)
 from .provider_registry import BrainProviderRegistry
 from .rate_limit_tracker import RateLimitTracker
 from .streaming import aggregate
@@ -3691,6 +3696,9 @@ class BrainManager:
         reasoning_effort: ReasoningEffort | None = None,
         delegated_voice: bool = False,
         tool_context: dict[str, Any] | None = None,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        project_root: str | None = None,
         loop_control: Any = None,
     ) -> BrainDispatcher:
         """Builds the dispatcher with an optional tool override.
@@ -3753,6 +3761,9 @@ class BrainManager:
             deadline_s=deadline_s,
             reasoning_effort=reasoning_effort,
             tool_context=tool_context,
+            project_id=project_id,
+            task_id=task_id,
+            project_root=project_root,
             loop_control=loop_control,
             **kwargs,
         )
@@ -4675,6 +4686,26 @@ class BrainManager:
         if agentic_block:
             parts.append(agentic_block)
         return "\n\n".join(p for p in parts if p)
+
+    def _resolve_project_execution_scope(
+        self,
+        *,
+        user_text: str,
+        conversation_id: str | None = None,
+    ) -> ProjectExecutionScope | None:
+        """Resolve immutable execution authority from canonical project state."""
+
+        if self._project_turn_context is None:
+            return None
+        try:
+            resolution = self._project_turn_context.resolve_turn(
+                user_text,
+                conversation_id=conversation_id,
+            )
+            return project_execution_scope(resolution)
+        except Exception:  # noqa: BLE001 — routing metadata must not crash a turn
+            log.exception("project execution scope resolution failed unexpectedly")
+            return None
 
     def _build_project_turn_context(
         self,
@@ -6510,7 +6541,11 @@ class BrainManager:
             log.debug("SkillInvoked publish failed", exc_info=True)
 
     async def _maybe_dispatch_skill_mission(
-        self, user_text: str, *, trace_id: UUID | None = None
+        self,
+        user_text: str,
+        *,
+        trace_id: UUID | None = None,
+        project_scope: ProjectExecutionScope | None = None,
     ) -> str | None:
         """Dispatch an ``execution: mission`` skill as a worker brief (AD-S5).
 
@@ -6573,6 +6608,15 @@ class BrainManager:
                 args,
                 user_utterance=user_text,
                 trace_id=trace_id or uuid4(),
+                project_id=(
+                    project_scope.project_id if project_scope is not None else None
+                ),
+                task_id=(
+                    project_scope.task_id if project_scope is not None else None
+                ),
+                project_root=(
+                    project_scope.project_root if project_scope is not None else None
+                ),
             )
         except Exception:  # noqa: BLE001
             log.warning("mission skill dispatch failed — inline fallback", exc_info=True)
@@ -10267,6 +10311,7 @@ class BrainManager:
         *,
         trace_id: UUID | None = None,
         source_layer: str | None = None,
+        project_scope: ProjectExecutionScope | None = None,
     ) -> str | None:
         """Starts ``spawn_worker`` deterministically, without LLM tool-choice.
 
@@ -10345,6 +10390,15 @@ class BrainManager:
             user_utterance=user_text,
             config_snapshot={"output_language": out_lang},
             trace_id=tid,
+            project_id=(
+                project_scope.project_id if project_scope is not None else None
+            ),
+            task_id=(
+                project_scope.task_id if project_scope is not None else None
+            ),
+            project_root=(
+                project_scope.project_root if project_scope is not None else None
+            ),
         )
         if not result.success:
             return await self._honest_failure_readback(
@@ -11228,6 +11282,13 @@ class BrainManager:
         routing_text, contextual_tool_names = self._contextual_routing_state(
             user_text, use_history=use_history,
         )
+        # N-13: resolve canonical execution authority before any mission fast
+        # path can dispatch. Ambiguous/unavailable state yields no scope and is
+        # never repaired from memory or conversation history.
+        project_scope = self._resolve_project_execution_scope(
+            user_text=user_text,
+            conversation_id=conversation_id,
+        )
 
         # Skill-aware routing guard (AD-S3): probe ONCE per turn, before any
         # fast path can grab the utterance. "starte die Morgenroutine" is an
@@ -11347,7 +11408,9 @@ class BrainManager:
             # optimistic ACK. Falls through to the inline path when the
             # dispatch is not possible (AD-OE6: no silent drop).
             mission_reply = await self._maybe_dispatch_skill_mission(
-                user_text, trace_id=turn_trace_id,
+                user_text,
+                trace_id=turn_trace_id,
+                project_scope=project_scope,
             )
             if mission_reply is not None:
                 await self._record_response_side_effects(
@@ -11539,7 +11602,10 @@ class BrainManager:
             forced_spawn = None
         else:
             forced_spawn = await self._force_spawn_worker(
-                user_text, trace_id=turn_trace_id, source_layer=source_layer,
+                user_text,
+                trace_id=turn_trace_id,
+                source_layer=source_layer,
+                project_scope=project_scope,
             )
         if forced_spawn is not None:
             # Bug fix 2026-04-30: history update also in the force-spawn path.
@@ -12215,6 +12281,12 @@ class BrainManager:
                 if prefer_tool_model
                 else self._override_dispatch_kwargs(turn_override)
             )
+            if project_scope is not None:
+                _disp_kwargs.update(
+                    project_id=project_scope.project_id,
+                    task_id=project_scope.task_id,
+                    project_root=project_scope.project_root,
+                )
             disp = self._build_dispatcher(
                 brain, tools_override=_turn_tools, **_disp_kwargs
             )
