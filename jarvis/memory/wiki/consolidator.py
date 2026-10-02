@@ -34,12 +34,24 @@ import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from jarvis.brain.provider_registry import BrainProviderRegistry
 from jarvis.brain.streaming import aggregate, is_length_truncated
 from jarvis.core.protocols import BrainMessage, BrainRequest
-from jarvis.memory.wiki.constants import CURATOR_DECISIONS, INFERRED_MARKER
+from jarvis.memory.governance import (
+    MemoryCandidate,
+    MemoryGovernanceClass,
+    MemoryPromotionGate,
+    MemoryPromotionOutcome,
+    ProjectMemoryRelation,
+)
+from jarvis.memory.wiki.constants import (
+    CURATOR_DECISIONS,
+    FACT_BASES,
+    INFERRED_MARKER,
+    FactBasis,
+)
 from jarvis.memory.wiki.curator_llm import (
     _extract_json_array,
     _resolve_provider_and_model,
@@ -208,6 +220,7 @@ class Consolidator:
         self._credential_filter = registry is None
         self._batch_limit = max(1, int(batch_limit))
         self._k_nearest = max(1, int(k_nearest))
+        self._memory_gate = MemoryPromotionGate()
         # Optional callback fired after a completed run (B7 wires the
         # self-documentation refresh here). Called best-effort.
         self._on_run_complete = on_run_complete
@@ -273,7 +286,19 @@ class Consolidator:
                 len(ungrounded),
             )
         grounded = [row for row in rows if row not in ungrounded]
-        outcome = await self._process_rows(grounded)
+
+        eligible, governance_deferred, governance_rejected = (
+            await self._govern_rows(grounded)
+        )
+
+        outcome = (
+            await self._process_rows(eligible)
+        ).merge(
+            _BatchOutcome(
+                deferred=governance_deferred,
+                rejected=governance_rejected,
+            )
+        )
         telemetry.inc("wiki_consolidator_runs")
 
         if self._on_run_complete is not None:
@@ -297,6 +322,68 @@ class Consolidator:
         if ungrounded and not grounded:
             return f"journal-evidence-rejected:{len(ungrounded)}"
         return f"journal-batch:{len(rows)}"
+
+    async def _govern_rows(
+        self,
+        rows: list[JournalRow],
+    ) -> tuple[list[JournalRow], int, int]:
+        """Apply persistent-memory authority before any Wiki judge/write."""
+
+        eligible: list[JournalRow] = []
+        deferred = 0
+        rejected = 0
+
+        for row in rows:
+            raw_basis = str(row.basis or "").strip().lower()
+            basis = cast(
+                FactBasis,
+                raw_basis if raw_basis in FACT_BASES else "inferred",
+            )
+
+            governance_class = (
+                MemoryGovernanceClass.USER_WIDE_DECISION
+                if row.kind == "decision"
+                else MemoryGovernanceClass.ORDINARY
+            )
+
+            # Stage 1 cannot yet distinguish stable project background from
+            # authoritative execution state. Fail closed until N-14D resolves
+            # canonical project authority.
+            project_relation = (
+                ProjectMemoryRelation.EXECUTION_STATUS
+                if row.kind == "project"
+                else ProjectMemoryRelation.NONE
+            )
+
+            decision = self._memory_gate.classify(
+                MemoryCandidate(
+                    content=row.fact,
+                    basis=basis,
+                    durable=True,
+                    governance_class=governance_class,
+                    project_relation=project_relation,
+                    explicit_remember=self._has_explicit_persistence_request(row),
+                    supporting_user_turns=1,
+                )
+            )
+
+            if decision.outcome is MemoryPromotionOutcome.AUTO_PERSIST:
+                eligible.append(row)
+                telemetry.inc("wiki_governance_auto_persist")
+                continue
+
+            if decision.outcome is MemoryPromotionOutcome.REJECT:
+                await self._mark([row.id], status="rejected")
+                telemetry.inc("wiki_governance_rejected")
+                rejected += 1
+                continue
+
+            # TEMPORARY / APPROVAL_REQUIRED / ROUTE_TO_PROJECT_STATE remain
+            # pending until their dedicated N-14 lifecycle surfaces are wired.
+            telemetry.inc("wiki_governance_deferred")
+            deferred += 1
+
+        return eligible, deferred, rejected
 
     async def _process_rows(self, rows: list[JournalRow]) -> _BatchOutcome:
         """Judge rows, bisecting capacity failures without losing candidates."""
