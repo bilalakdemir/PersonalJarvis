@@ -14,6 +14,7 @@ from .message_recorder import MessageRecorder
 from .people import Person, PersonStore
 from .recall import RecallStore
 from .soul import Soul
+from .temporary import TemporaryMemoryItem, TemporaryMemoryStore
 from .user_profile import UserProfile
 from .workspace import Workspace, person_slug
 
@@ -26,6 +27,8 @@ __all__ = [
     "PersonStore",
     "RecallStore",
     "Soul",
+    "TemporaryMemoryItem",
+    "TemporaryMemoryStore",
     "UserProfile",
     "Workspace",
     "default_core_memory",
