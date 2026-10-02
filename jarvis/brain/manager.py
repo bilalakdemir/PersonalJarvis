@@ -3805,10 +3805,17 @@ class BrainManager:
             except Exception:  # noqa: BLE001 — the layers without the wiki are still Jarvis
                 log.debug("render_surface_prompt: wiki context skipped", exc_info=True)
         try:
-            turn_context = self._build_turn_context(user_text=user_text)
+            turn_context = self._build_turn_context()
         except Exception:  # noqa: BLE001 — the context block is a nicety
             log.debug("render_surface_prompt: turn context skipped", exc_info=True)
             turn_context = ""
+        project_context = self._build_project_turn_context(user_text=user_text)
+        if project_context:
+            turn_context = (
+                f"{turn_context}\n\n{project_context}"
+                if turn_context
+                else project_context
+            )
         return prompt, turn_context
 
     def _build_tool_ack_emitter(
@@ -4638,64 +4645,60 @@ class BrainManager:
             log.debug("AI Pointer task launch skipped", exc_info=True)
             return None
 
-    def _build_turn_context(
+    def _build_turn_context(self) -> str:
+        """Per-turn dynamic context for the user message (cache-optimized mode).
+
+        Date/time + wiki context. Empty in legacy mode
+        (there these live in the system prompt instead). Riding on the user
+        message keeps the cached system prefix byte-stable across turns, which
+        is what actually lets the Gemini/Anthropic prompt cache hit.
+        """
+        if not self._cache_optimized():
+            return ""
+        from datetime import datetime
+
+        _weekdays_en = (
+            "Monday", "Tuesday", "Wednesday", "Thursday",
+            "Friday", "Saturday", "Sunday",
+        )
+        _now = datetime.now()
+        parts: list[str] = [
+            f"[Current date and time: {_weekdays_en[_now.weekday()]}, "
+            f"{_now.strftime('%Y-%m-%d %H:%M')}]"
+        ]
+        private = _TURN_OVERRIDE.get()
+        if private is not None and private.tool_context.get("tool_origin") == "society":
+            return "\n\n".join(parts)
+        if self._wiki_context_suffix:
+            parts.append(self._wiki_context_suffix)
+        agentic_block = self._agentic_focus_block()
+        if agentic_block:
+            parts.append(agentic_block)
+        return "\n\n".join(p for p in parts if p)
+
+    def _build_project_turn_context(
         self,
         *,
-        user_text: str | None = None,
+        user_text: str,
         conversation_id: str | None = None,
     ) -> str:
-        """Build dynamic context that belongs only to the current user turn.
+        """Build N-12 structural project context for this user turn only."""
 
-        Date/wiki/agentic context remains cache-optimized exactly as before.
-        N-12 project context is structural and current-turn-only, so it is
-        appended here even in legacy prompt-cache mode rather than placed in
-        persona/system prompt or conversation history.
-        """
-        parts: list[str] = []
-
-        if self._cache_optimized():
-            from datetime import datetime
-
-            _weekdays_en = (
-                "Monday", "Tuesday", "Wednesday", "Thursday",
-                "Friday", "Saturday", "Sunday",
+        if self._project_turn_context is None:
+            return ""
+        try:
+            return self._project_turn_context.build_turn_block(
+                user_text,
+                conversation_id=conversation_id,
             )
-            _now = datetime.now()
-            parts.append(
-                f"[Current date and time: {_weekdays_en[_now.weekday()]}, "
-                f"{_now.strftime('%Y-%m-%d %H:%M')}]"
+        except Exception:  # noqa: BLE001 — project routing must not crash a turn
+            log.exception("project context resolution failed unexpectedly")
+            return (
+                "[PROJECT CONTEXT — CANONICAL STATE UNAVAILABLE]\n"
+                "Project context resolution failed. Do not reconstruct or "
+                "replace canonical project state from conversation history "
+                "or memory."
             )
-
-            private = _TURN_OVERRIDE.get()
-            is_society_turn = (
-                private is not None
-                and private.tool_context.get("tool_origin") == "society"
-            )
-            if not is_society_turn:
-                if self._wiki_context_suffix:
-                    parts.append(self._wiki_context_suffix)
-                agentic_block = self._agentic_focus_block()
-                if agentic_block:
-                    parts.append(agentic_block)
-
-        if user_text and self._project_turn_context is not None:
-            try:
-                project_block = self._project_turn_context.build_turn_block(
-                    user_text,
-                    conversation_id=conversation_id,
-                )
-            except Exception:  # noqa: BLE001 — project routing must not crash a turn
-                log.exception("project context resolution failed unexpectedly")
-                project_block = (
-                    "[PROJECT CONTEXT — CANONICAL STATE UNAVAILABLE]\n"
-                    "Project context resolution failed. Do not reconstruct or "
-                    "replace canonical project state from conversation history "
-                    "or memory."
-                )
-            if project_block:
-                parts.append(project_block)
-
-        return "\n\n".join(p for p in parts if p)
 
     def _agentic_focus_block(self) -> str:
         """Workspace-awareness block while the Agentic IDE's focus mode is on.
@@ -11870,10 +11873,17 @@ class BrainManager:
         # wiki) once. In cache-optimized mode it rides on the user
         # message (keeping the cached system prompt stable); empty in legacy
         # mode. Reused for every provider in the fallback chain below.
-        turn_context = self._build_turn_context(
+        turn_context = self._build_turn_context()
+        project_context = self._build_project_turn_context(
             user_text=user_text,
             conversation_id=conversation_id,
         )
+        if project_context:
+            turn_context = (
+                f"{turn_context}\n\n{project_context}"
+                if turn_context
+                else project_context
+            )
         if screen_context.note:
             turn_context = (
                 f"{turn_context}\n\n{screen_context.note}"
