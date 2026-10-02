@@ -37,6 +37,39 @@ class ProjectStateMemoryProposalRequested(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectStateMemoryProposalCreated(Event):
+    """One exact durable project-state proposal awaits a dedicated decision."""
+
+    project_id: str = ""
+    queue_item_id: int = 0
+    candidate_id: int = 0
+    transaction_id: str = ""
+    proposal_digest: str = ""
+    source_state_revision: str = ""
+    files_affected: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateMemoryApprovalAccepted(Event):
+    """The user approved one exact durable project-state proposal."""
+
+    project_id: str = ""
+    queue_item_id: int = 0
+    transaction_id: str = ""
+    proposal_digest: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectStateMemoryApprovalRejected(Event):
+    """The user rejected one exact durable project-state proposal."""
+
+    project_id: str = ""
+    queue_item_id: int = 0
+    transaction_id: str = ""
+    proposal_digest: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectStateChangeProposed(Event):
     project_id: str = ""
     transaction_id: str = ""
