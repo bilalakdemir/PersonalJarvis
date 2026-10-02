@@ -13,6 +13,7 @@ from jarvis.brain.project_context import (
     ProjectContextResolutionStatus,
     project_execution_scope,
 )
+from jarvis.brain.tool_gateway import BrainSupervisorToolGateway
 from jarvis.core import runtime_refs
 from jarvis.core.bus import EventBus
 from jarvis.core.protocols import (
@@ -276,3 +277,80 @@ async def test_mission_manager_rejects_partial_project_scope(tmp_path: Path) -> 
             )
     finally:
         await manager.stop()
+
+
+class _SupervisorTool:
+    name = "echo"
+    risk_tier = "safe"
+    description = "echo"
+    schema: dict[str, Any] = {"type": "object", "properties": {}}
+
+    async def execute(self, _args: dict[str, Any], _ctx: Any) -> ToolResult:
+        raise AssertionError("gateway must execute through the executor")
+
+
+class _CapturingExecutor:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def execute(
+        self,
+        _tool: Any,
+        _args: dict[str, Any],
+        **kwargs: Any,
+    ) -> ToolResult:
+        self.calls.append(dict(kwargs))
+        return ToolResult(success=True, output="ok")
+
+
+@pytest.mark.asyncio
+async def test_project_correlation_reaches_supervisor_executor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_refs._reset_for_tests()
+    executor = _CapturingExecutor()
+    manager = SimpleNamespace(
+        _tool_executor=executor,
+        _tools={"echo": _SupervisorTool()},
+        _config=None,
+    )
+    runtime_refs.set_supervisor_tool_gateway(BrainSupervisorToolGateway(manager))
+    broker = WorkerToolBroker()
+    monkeypatch.setattr(
+        broker,
+        "_ensure_server",
+        lambda: SimpleNamespace(server_address=("127.0.0.1", 12345)),
+    )
+    project_root = str(tmp_path.resolve())
+
+    binding = broker.issue(
+        task_text="echo once",
+        mcp_server_ids=(),
+        app_commands=(),
+        native_tool_names=("echo",),
+        mission_id="mission-1",
+        worker_id="worker-1",
+        project_id="alpha",
+        task_id="N-13",
+        project_root=project_root,
+        ttl_s=30,
+    )
+    assert binding is not None
+    try:
+        result = await binding.execute("echo", {})
+        assert result["success"] is True
+        call = executor.calls[0]
+        assert call["project_id"] == "alpha"
+        assert call["task_id"] == "N-13"
+        assert call["project_root"] == project_root
+        assert call["delegated"] is True
+        config = call["config_snapshot"]
+        assert config["mission_id"] == "mission-1"
+        assert config["worker_id"] == "worker-1"
+        assert config["project_id"] == "alpha"
+        assert config["task_id"] == "N-13"
+        assert config["grant_id"] == call["capability_grant"].grant_id
+    finally:
+        binding.close()
+        runtime_refs._reset_for_tests()
