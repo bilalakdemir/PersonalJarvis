@@ -787,6 +787,53 @@ class CandidateJournal:
             ).fetchone()
             return row is not None
 
+    def delete_older_than(
+        self,
+        cutoff_ms: int,
+        *,
+        statuses: Sequence[CandidateStatus] = (
+            "pending",
+            "consolidated",
+            "rejected",
+            "skipped",
+        ),
+        limit: int = 1000,
+    ) -> tuple[int, ...]:
+        """Delete retention-expired candidate rows and dependent evidence."""
+
+        allowed = tuple(
+            status
+            for status in dict.fromkeys(statuses)
+            if status in {"pending", "consolidated", "rejected", "skipped"}
+        )
+        if not allowed:
+            return ()
+        with self._lock:
+            conn = self._connection()
+            if conn is None:
+                return ()
+            placeholders = ",".join("?" for _ in allowed)
+            query = (
+                "SELECT id FROM wiki_candidate_journal "
+                f"WHERE created_ms <= ? AND status IN ({placeholders}) "  # noqa: S608
+                "ORDER BY created_ms, id LIMIT ?"
+            )
+            rows = conn.execute(
+                query,
+                (int(cutoff_ms), *allowed, max(1, int(limit))),
+            ).fetchall()
+            ids = tuple(int(row[0]) for row in rows)
+            if not ids:
+                return ()
+            id_placeholders = ",".join("?" for _ in ids)
+            conn.execute(
+                "DELETE FROM wiki_candidate_journal "
+                f"WHERE id IN ({id_placeholders})",  # noqa: S608
+                ids,
+            )
+            conn.commit()
+            return ids
+
     def _now_ms(self) -> int:
         return int(self._clock() * 1000)
 
