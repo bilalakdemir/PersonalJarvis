@@ -32,6 +32,9 @@ class MissionDispatched(_PayloadBase):
     parent_mission_id: str | None = None
     priority: int = 0
     language: Literal["de", "en"] = "de"
+    project_id: str | None = None
+    task_id: str | None = None
+    project_root: str | None = None
 
 
 class MissionPlanReady(_PayloadBase):

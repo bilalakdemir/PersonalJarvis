@@ -49,6 +49,15 @@ class MissionView:
     state: MissionState
 
 
+@dataclass(frozen=True, slots=True)
+class MissionProjectScope:
+    """Project authority attached to a mission at dispatch time."""
+
+    project_id: str
+    task_id: str | None
+    project_root: str
+
+
 class MissionManager:
     """Lifecycle + state transitions for missions.
 
@@ -62,6 +71,7 @@ class MissionManager:
         self._store = MissionEventStore(db_path, self._bus)
         self._started = False
         self._state_locks: dict[str, asyncio.Lock] = {}
+        self._project_scopes: dict[str, MissionProjectScope] = {}
 
     async def start(
         self,
@@ -129,6 +139,9 @@ class MissionManager:
         source_actor: SourceActor = "hauptjarvis",
         priority: int = 0,
         parent_mission_id: str | None = None,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        project_root: str | None = None,
     ) -> str:
         """Erzeuge eine neue Mission im PENDING-State. Returns `mission_id`."""
         self._ensure_started()
@@ -143,6 +156,9 @@ class MissionManager:
                 parent_mission_id=parent_mission_id,
                 priority=priority,
                 language=language,
+                project_id=project_id,
+                task_id=task_id,
+                project_root=project_root,
             ),
         )
         # Header first — otherwise subscribers could see the MissionDispatched
@@ -155,7 +171,34 @@ class MissionManager:
             ts_ms=ts,
         )
         await self._store.append_and_publish(env)
+        if project_id is not None and project_root is not None:
+            self._project_scopes[mission_id] = MissionProjectScope(
+                project_id=project_id,
+                task_id=task_id,
+                project_root=project_root,
+            )
         return mission_id
+
+    async def project_scope(self, mission_id: str) -> MissionProjectScope | None:
+        """Return persisted project authority for a mission, if it has any."""
+
+        self._ensure_started()
+        cached = self._project_scopes.get(mission_id)
+        if cached is not None:
+            return cached
+        for envelope in await self._store.events_for_mission(mission_id):
+            payload = envelope.payload
+            if isinstance(payload, MissionDispatched):
+                if payload.project_id is None or payload.project_root is None:
+                    return None
+                scope = MissionProjectScope(
+                    project_id=payload.project_id,
+                    task_id=payload.task_id,
+                    project_root=payload.project_root,
+                )
+                self._project_scopes[mission_id] = scope
+                return scope
+        return None
 
     async def transition_state(
         self,

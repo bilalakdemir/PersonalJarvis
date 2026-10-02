@@ -108,6 +108,9 @@ class WorkerCapabilityInventory:
         ttl_s: float = 25 * 60.0,
         mission_id: str | None = None,
         worker_id: str | None = None,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        project_root: str | None = None,
     ):  # noqa: ANN201
         """Create the short-lived live grant for this mission, if reachable."""
         from .worker_tool_broker import issue_worker_tool_binding
@@ -120,6 +123,9 @@ class WorkerCapabilityInventory:
             ttl_s=ttl_s,
             mission_id=mission_id,
             worker_id=worker_id,
+            project_id=project_id,
+            task_id=task_id,
+            project_root=project_root,
         )
 
     def report_for(self, backend: str, *, binding: Any | None = None) -> dict[str, Any]:

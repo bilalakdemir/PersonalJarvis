@@ -49,6 +49,30 @@ class ProjectContextResolution:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectExecutionScope:
+    """Immutable execution metadata derived only from canonical project state."""
+
+    project_id: str
+    task_id: str | None
+    project_root: str
+
+
+def project_execution_scope(
+    resolution: ProjectContextResolution,
+) -> ProjectExecutionScope | None:
+    """Return bounded execution scope only for a valid canonical resolution."""
+
+    snapshot = resolution.snapshot
+    if not resolution.resolved or snapshot is None:
+        return None
+    return ProjectExecutionScope(
+        project_id=snapshot.project_id,
+        task_id=snapshot.current_task,
+        project_root=str(snapshot.root_path),
+    )
+
+
 def _normalise(value: str) -> str:
     return " ".join(value.strip().casefold().split())
 

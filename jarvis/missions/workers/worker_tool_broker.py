@@ -245,6 +245,9 @@ class _BrokerScope:
     native_tool_names: tuple[str, ...]
     mission_id: str | None = None
     worker_id: str | None = None
+    project_id: str | None = None
+    task_id: str | None = None
+    project_root: str | None = None
     capability_grant: CapabilityGrant | None = None
     _revoked: bool = False
     _state_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -393,6 +396,9 @@ class _BrokerScope:
                     user_utterance=self.task_text,
                     mission_id=self.mission_id,
                     worker_id=self.worker_id,
+                    project_id=self.project_id,
+                    task_id=self.task_id,
+                    project_root=self.project_root,
                     capability_grant=self.capability_grant,
                     delegated=True,
                     config_snapshot={
@@ -754,6 +760,9 @@ class WorkerToolBroker:
         ttl_s: float = _DEFAULT_TTL_S,
         mission_id: str | None = None,
         worker_id: str | None = None,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        project_root: str | None = None,
     ) -> WorkerToolBrokerBinding | None:
         """Resolve a live, credential-aware grant from the supervisor tools."""
         try:
@@ -765,6 +774,11 @@ class WorkerToolBroker:
             return None
 
         from .capabilities import worker_app_command_allowed
+
+        if task_id is not None and project_id is None:
+            return None
+        if project_id is not None and project_root is None:
+            return None
 
         requested_app_commands = tuple(dict.fromkeys(app_commands))
         if any(
@@ -784,6 +798,9 @@ class WorkerToolBroker:
             native_tool_names=tuple(dict.fromkeys(native_tool_names)),
             mission_id=mission_id,
             worker_id=worker_id,
+            project_id=project_id,
+            task_id=task_id,
+            project_root=project_root,
         )
         granted_tool_names = frozenset(str(spec["name"]) for spec in scope.specs)
         if not granted_tool_names:
@@ -792,6 +809,14 @@ class WorkerToolBroker:
             grant_id=str(uuid4()),
             tools=granted_tool_names,
             expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+            project_ids=(
+                frozenset({project_id}) if project_id is not None else frozenset()
+            ),
+            task_ids=(
+                frozenset({task_id}) if task_id is not None else frozenset()
+            ),
+            read_roots=((project_root,) if project_root is not None else ()),
+            write_roots=((project_root,) if project_root is not None else ()),
         )
         server = self._ensure_server()
         token = secrets.token_urlsafe(32)
@@ -862,6 +887,9 @@ def issue_worker_tool_binding(
     ttl_s: float = _DEFAULT_TTL_S,
     mission_id: str | None = None,
     worker_id: str | None = None,
+    project_id: str | None = None,
+    task_id: str | None = None,
+    project_root: str | None = None,
 ) -> WorkerToolBrokerBinding | None:
     return _BROKER.issue(
         task_text=task_text,
@@ -871,6 +899,9 @@ def issue_worker_tool_binding(
         ttl_s=ttl_s,
         mission_id=mission_id,
         worker_id=worker_id,
+        project_id=project_id,
+        task_id=task_id,
+        project_root=project_root,
     )
 
 
