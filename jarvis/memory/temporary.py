@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,8 @@ import aiosqlite
 
 from .migration_runner import run_migrations
 from .wiki.secret_guard import contains_secret
+
+log = logging.getLogger(__name__)
 
 SCHEMA_FILE = Path(__file__).parent / "schema.sql"
 
