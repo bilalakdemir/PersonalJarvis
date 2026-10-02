@@ -777,7 +777,7 @@ class WorkerToolBroker:
 
         if task_id is not None and project_id is None:
             return None
-        if project_id is not None and project_root is None:
+        if (project_id is None) != (project_root is None):
             return None
 
         requested_app_commands = tuple(dict.fromkeys(app_commands))
