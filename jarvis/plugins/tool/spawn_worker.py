@@ -519,11 +519,11 @@ class SpawnWorkerTool:
     ) -> ToolResult:
         utterance = (args.get("utterance") or "").strip()
         if not utterance:
-            return ToolResult(success=False, error="empty utterance")
+            return ToolResult(success=False, output="", error="empty utterance")
         if ctx.task_id is not None and ctx.project_id is None:
-            return ToolResult(success=False, error="invalid project execution scope")
+            return ToolResult(success=False, output="", error="invalid project execution scope")
         if (ctx.project_id is None) != (ctx.project_root is None):
-            return ToolResult(success=False, error="invalid project execution scope")
+            return ToolResult(success=False, output="", error="invalid project execution scope")
 
         # Context-bleed guard (forensic 2026-06-20): under a full provider
         # collapse the turn ran on a degraded fallback model fed a long prior
