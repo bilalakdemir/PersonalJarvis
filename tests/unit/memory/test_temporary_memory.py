@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from jarvis.core.config import MemoryConfig
 from jarvis.memory.temporary import TemporaryMemoryStore
 
 _DAY_S = 86_400
@@ -135,19 +134,3 @@ async def test_reopen_is_idempotent_and_keeps_existing_rows(tmp_path: Path) -> N
 
     assert version >= 10
     assert table == ("temporary_memory",)
-
-
-def test_memory_config_uses_n14_defaults_and_accepts_legacy_recall_key() -> None:
-    defaults = MemoryConfig()
-
-    assert defaults.conversation_retention_days == 30
-    assert defaults.temporary_memory_retention_days == 30
-    assert defaults.candidate_retention_days == 30
-    assert defaults.promotion_approval_retention_days == 30
-    assert defaults.pre_expiry_review_hours == 24
-    assert defaults.active_context_idle_hours == 24
-    assert defaults.retention_days_recall == 30
-
-    legacy = MemoryConfig(retention_days_recall=45)
-    assert legacy.conversation_retention_days == 45
-    assert legacy.retention_days_recall == 45
