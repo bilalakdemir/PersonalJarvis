@@ -180,6 +180,29 @@ class MemoryPromotionQueue:
             )
         return _row_to_item(row)
 
+    async def get(
+        self,
+        queue_item_id: int,
+    ) -> MemoryPromotionQueueItem | None:
+        """Return one exact durable promotion item by ID."""
+
+        wanted = int(queue_item_id)
+        if wanted <= 0:
+            return None
+        conn = await self._ensure_open()
+        cur = await conn.execute(
+            """
+            SELECT *
+            FROM memory_promotion_queue
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (wanted,),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        return _row_to_item(row) if row is not None else None
+
     async def pending(
         self,
         *,
