@@ -164,6 +164,19 @@ _PROJECT_EXECUTION_SCOPE: ContextVar[ProjectExecutionScope | None] = ContextVar(
 )
 
 
+def _project_execution_kwargs() -> dict[str, str | None]:
+    """Optional ToolExecutor kwargs; empty keeps non-project call signatures stable."""
+
+    scope = _PROJECT_EXECUTION_SCOPE.get()
+    if scope is None:
+        return {}
+    return {
+        "project_id": scope.project_id,
+        "task_id": scope.task_id,
+        "project_root": scope.project_root,
+    }
+
+
 class _SkillTurnState:
     """Task-local mutable state for one manager skill-routing turn."""
 
@@ -6612,22 +6625,13 @@ class BrainManager:
             "target": "",
         }
         log.info("Mission skill dispatch: %s (%r)", name, user_text[:120])
-        project_scope = _PROJECT_EXECUTION_SCOPE.get()
         try:
             result = await self._tool_executor.execute(
                 tool,
                 args,
                 user_utterance=user_text,
                 trace_id=trace_id or uuid4(),
-                project_id=(
-                    project_scope.project_id if project_scope is not None else None
-                ),
-                task_id=(
-                    project_scope.task_id if project_scope is not None else None
-                ),
-                project_root=(
-                    project_scope.project_root if project_scope is not None else None
-                ),
+                **_project_execution_kwargs(),
             )
         except Exception:  # noqa: BLE001
             log.warning("mission skill dispatch failed — inline fallback", exc_info=True)
@@ -10394,22 +10398,13 @@ class BrainManager:
             default=DEFAULT_LOCALE,
             conversation_language=self._conversation_language,
         )
-        project_scope = _PROJECT_EXECUTION_SCOPE.get()
         result = await self._tool_executor.execute(
             tool,
             args,
             user_utterance=user_text,
             config_snapshot={"output_language": out_lang},
             trace_id=tid,
-            project_id=(
-                project_scope.project_id if project_scope is not None else None
-            ),
-            task_id=(
-                project_scope.task_id if project_scope is not None else None
-            ),
-            project_root=(
-                project_scope.project_root if project_scope is not None else None
-            ),
+            **_project_execution_kwargs(),
         )
         if not result.success:
             return await self._honest_failure_readback(
@@ -10485,20 +10480,11 @@ class BrainManager:
             default=DEFAULT_LOCALE,
             conversation_language=self._conversation_language,
         )
-        project_scope = _PROJECT_EXECUTION_SCOPE.get()
         result = await self._tool_executor.execute(
             tool, args, user_utterance=user_text,
             config_snapshot={"output_language": out_lang},
             trace_id=trace_id,
-            project_id=(
-                project_scope.project_id if project_scope is not None else None
-            ),
-            task_id=(
-                project_scope.task_id if project_scope is not None else None
-            ),
-            project_root=(
-                project_scope.project_root if project_scope is not None else None
-            ),
+            **_project_execution_kwargs(),
         )
         if not result.success:
             return await self._honest_failure_readback(
@@ -10553,21 +10539,12 @@ class BrainManager:
             "Recovered leaked %s tool-call from brain text "
             "(provider function-calling leak): %r", name, user_text[:160],
         )
-        project_scope = _PROJECT_EXECUTION_SCOPE.get()
         result = await self._tool_executor.execute(
             tool,
             inp,
             user_utterance=user_text,
             trace_id=trace_id,
-            project_id=(
-                project_scope.project_id if project_scope is not None else None
-            ),
-            task_id=(
-                project_scope.task_id if project_scope is not None else None
-            ),
-            project_root=(
-                project_scope.project_root if project_scope is not None else None
-            ),
+            **_project_execution_kwargs(),
         )
         if not result.success:
             # A failed cli_<name> call carries the real cause in stderr; speak
