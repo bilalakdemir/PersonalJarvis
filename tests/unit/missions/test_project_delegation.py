@@ -206,6 +206,14 @@ def test_worker_broker_rejects_incomplete_project_scope(
         project_root=str(tmp_path.resolve()),
         ttl_s=30,
     ) is None
+    assert broker.issue(
+        task_text="echo once",
+        mcp_server_ids=(),
+        app_commands=(),
+        native_tool_names=("echo",),
+        project_root=str(tmp_path.resolve()),
+        ttl_s=30,
+    ) is None
     runtime_refs._reset_for_tests()
 
 
@@ -240,7 +248,7 @@ async def test_spawn_worker_carries_execution_context_into_mission_dispatch(
         ctx,
     )
     assert result.success is True
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.05)
 
     assert len(manager.dispatches) == 1
     dispatched = manager.dispatches[0]
