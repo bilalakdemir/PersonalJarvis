@@ -36,9 +36,15 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, cast
 
+from jarvis.brain.project_context import (
+    ProjectContextResolution,
+    ProjectContextResolutionStatus,
+    ProjectContextResolver,
+)
 from jarvis.brain.provider_registry import BrainProviderRegistry
 from jarvis.brain.streaming import aggregate, is_length_truncated
-from jarvis.core.protocols import BrainMessage, BrainRequest
+from jarvis.core.project_state_events import ProjectStateMemoryProposalRequested
+from jarvis.core.protocols import BrainMessage, BrainRequest, EventPublisher
 from jarvis.memory.governance import (
     MemoryCandidate,
     MemoryGovernanceClass,
@@ -209,6 +215,8 @@ class Consolidator:
         batch_limit: int = 8,
         k_nearest: int = 4,
         on_run_complete: Any = None,
+        project_resolver: ProjectContextResolver | None = None,
+        event_publisher: EventPublisher | None = None,
     ) -> None:
         self._root_cfg = config
         self._curator_cfg = config.memory.wiki.curator
@@ -221,6 +229,9 @@ class Consolidator:
         self._batch_limit = max(1, int(batch_limit))
         self._k_nearest = max(1, int(k_nearest))
         self._memory_gate = MemoryPromotionGate()
+        self._project_resolver = project_resolver
+        self._event_publisher = event_publisher
+        self._project_route_ids: set[int] = set()
         # Optional callback fired after a completed run (B7 wires the
         # self-documentation refresh here). Called best-effort.
         self._on_run_complete = on_run_complete
@@ -323,6 +334,106 @@ class Consolidator:
             return f"journal-evidence-rejected:{len(ungrounded)}"
         return f"journal-batch:{len(rows)}"
 
+    def _resolve_project_candidate(
+        self,
+        row: JournalRow,
+    ) -> ProjectContextResolution | None:
+        """Resolve project authority only from canonical managed-project state."""
+
+        if self._project_resolver is None:
+            return None
+
+        try:
+            direct = self._project_resolver.resolve(row.fact)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Consolidator: project authority resolution failed for "
+                "candidate %d: %s",
+                row.id,
+                exc,
+            )
+            return None
+
+        if direct.resolved:
+            return direct
+
+        if direct.status is not ProjectContextResolutionStatus.NO_PROJECT:
+            return direct
+
+        resolved: dict[str, ProjectContextResolution] = {}
+        for subject in row.subjects:
+            try:
+                candidate = self._project_resolver.resolve(
+                    "",
+                    explicit_project=subject,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "Consolidator: project subject resolution failed for "
+                    "candidate %d: %s",
+                    row.id,
+                    exc,
+                )
+                return None
+
+            if candidate.resolved and candidate.project_id:
+                resolved[candidate.project_id] = candidate
+                continue
+
+            if candidate.status in {
+                ProjectContextResolutionStatus.AMBIGUOUS,
+                ProjectContextResolutionStatus.UNAVAILABLE,
+            }:
+                return candidate
+
+        if len(resolved) == 1:
+            return next(iter(resolved.values()))
+
+        return direct
+
+    async def _request_project_state_proposal(
+        self,
+        row: JournalRow,
+        resolution: ProjectContextResolution | None,
+    ) -> bool:
+        """Publish one metadata-only route request; never mutate project files."""
+
+        if (
+            self._event_publisher is None
+            or resolution is None
+            or not resolution.resolved
+            or resolution.snapshot is None
+        ):
+            return False
+
+        if row.id in self._project_route_ids:
+            return True
+
+        snapshot = resolution.snapshot
+        try:
+            await self._event_publisher.publish(
+                ProjectStateMemoryProposalRequested(
+                    source_layer="memory",
+                    project_id=snapshot.project_id,
+                    candidate_id=row.id,
+                    source_state_revision=snapshot.state_revision,
+                    current_task=snapshot.current_task,
+                    relation="execution-status",
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Consolidator: project proposal request failed for "
+                "candidate %d: %s",
+                row.id,
+                exc,
+            )
+            return False
+
+        self._project_route_ids.add(row.id)
+        telemetry.inc("wiki_governance_project_routed")
+        return True
+
     async def _govern_rows(
         self,
         rows: list[JournalRow],
@@ -346,14 +457,18 @@ class Consolidator:
                 else MemoryGovernanceClass.ORDINARY
             )
 
-            # Stage 1 cannot yet distinguish stable project background from
-            # authoritative execution state. Fail closed until N-14D resolves
-            # canonical project authority.
-            project_relation = (
-                ProjectMemoryRelation.EXECUTION_STATUS
-                if row.kind == "project"
-                else ProjectMemoryRelation.NONE
-            )
+            project_resolution: ProjectContextResolution | None = None
+            project_id: str | None = None
+            project_relation = ProjectMemoryRelation.NONE
+            if row.kind == "project":
+                project_relation = ProjectMemoryRelation.EXECUTION_STATUS
+                project_resolution = self._resolve_project_candidate(row)
+                if (
+                    project_resolution is not None
+                    and project_resolution.resolved
+                    and project_resolution.project_id
+                ):
+                    project_id = project_resolution.project_id
 
             decision = self._memory_gate.classify(
                 MemoryCandidate(
@@ -362,6 +477,7 @@ class Consolidator:
                     durable=True,
                     governance_class=governance_class,
                     project_relation=project_relation,
+                    project_id=project_id,
                     explicit_remember=self._has_explicit_persistence_request(row),
                     supporting_user_turns=1,
                 )
@@ -377,6 +493,12 @@ class Consolidator:
                 telemetry.inc("wiki_governance_rejected")
                 rejected += 1
                 continue
+
+            if decision.outcome is MemoryPromotionOutcome.ROUTE_TO_PROJECT_STATE:
+                await self._request_project_state_proposal(
+                    row,
+                    project_resolution,
+                )
 
             # TEMPORARY / APPROVAL_REQUIRED / ROUTE_TO_PROJECT_STATE remain
             # pending until their dedicated N-14 lifecycle surfaces are wired.

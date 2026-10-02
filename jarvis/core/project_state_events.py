@@ -26,6 +26,17 @@ class ProjectStateInvalid(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectStateMemoryProposalRequested(Event):
+    """A memory candidate needs governed project-state proposal construction."""
+
+    project_id: str = ""
+    candidate_id: int = 0
+    source_state_revision: str = ""
+    current_task: str | None = None
+    relation: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectStateChangeProposed(Event):
     project_id: str = ""
     transaction_id: str = ""
