@@ -526,6 +526,7 @@ async def bootstrap_wiki_integration(
     capture_ready = False
     if journal is not None and scheduler is not None:
         try:
+            from jarvis.brain.project_context import ProjectContextResolver
             from jarvis.memory.wiki.consolidator import Consolidator
             from jarvis.memory.wiki.search import VaultSearch
             from jarvis.memory.wiki.self_doc import refresh_memory_page
@@ -551,6 +552,8 @@ async def bootstrap_wiki_integration(
                 search=consolidator_search,
                 vault_root=vault_path,
                 on_run_complete=_refresh_self_doc,
+                project_resolver=ProjectContextResolver(),
+                event_publisher=bus,
             )
             scheduler.attach_consolidator(consolidator)
             capture_ready = True
