@@ -1892,11 +1892,13 @@ class Kontrollierer:
 
         broker_binding: Any = EmptyWorkerToolBrokerBinding()
         project_scope = None
+        project_scope_lookup_failed = False
         resolve_project_scope = getattr(self._manager, "project_scope", None)
         if callable(resolve_project_scope):
             try:
                 project_scope = await resolve_project_scope(mission_id)
             except Exception:  # noqa: BLE001 - unavailable project authority degrades closed
+                project_scope_lookup_failed = True
                 logger.exception(
                     "Mission %s worker %s: project scope unavailable",
                     mission_id,
@@ -1904,7 +1906,7 @@ class Kontrollierer:
                 )
         inventory = getattr(worker, "capability_inventory", None)
         bind_broker = getattr(inventory, "bind_broker", None)
-        if callable(bind_broker):
+        if callable(bind_broker) and not project_scope_lookup_failed:
             try:
                 issued_binding = bind_broker(
                     ttl_s=worker_timeout_s + 60.0,
