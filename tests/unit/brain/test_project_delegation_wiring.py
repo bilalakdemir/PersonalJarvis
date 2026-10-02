@@ -6,6 +6,8 @@ from typing import Any
 import pytest
 
 from jarvis.brain.dispatcher import BrainDispatcher
+from jarvis.brain.manager import BrainManager, _PROJECT_EXECUTION_SCOPE
+from jarvis.brain.project_context import ProjectExecutionScope
 from jarvis.brain.tool_use_loop import ToolUseLoop
 from jarvis.core.protocols import BrainDelta, BrainRequest, ToolResult
 
@@ -90,3 +92,26 @@ def test_dispatcher_preserves_project_scope_when_brain_is_swapped() -> None:
     assert swapped._project_id == "alpha"
     assert swapped._task_id == "N-13"
     assert swapped._project_root == "/projects/alpha"
+
+
+@pytest.mark.asyncio
+async def test_generate_resets_project_execution_scope_after_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = BrainManager.__new__(BrainManager)
+
+    async def fake_generate(*_args: Any, **_kwargs: Any) -> str:
+        _PROJECT_EXECUTION_SCOPE.set(
+            ProjectExecutionScope(
+                project_id="alpha",
+                task_id="N-13",
+                project_root="/projects/alpha",
+            )
+        )
+        return "ok"
+
+    monkeypatch.setattr(manager, "_generate", fake_generate)
+    before = _PROJECT_EXECUTION_SCOPE.get()
+
+    assert await manager.generate("project turn") == "ok"
+    assert _PROJECT_EXECUTION_SCOPE.get() is before
