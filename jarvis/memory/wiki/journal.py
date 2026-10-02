@@ -465,6 +465,11 @@ class CandidateJournal:
             try:
                 subjects = normalise_subjects(json.loads(row[6]) or ())
             except (TypeError, ValueError):
+                log.warning(
+                    "CandidateJournal: invalid subjects JSON for candidate %d; "
+                    "using empty subjects",
+                    wanted,
+                )
                 subjects = ()
             return JournalRow(
                 id=row[0],
