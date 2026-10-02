@@ -124,6 +124,7 @@ from .project_context import (
     ProjectExecutionScope,
     ProjectTurnContext,
     project_execution_scope,
+    render_project_context,
 )
 from .provider_registry import BrainProviderRegistry
 from .rate_limit_tracker import RateLimitTracker
@@ -4687,25 +4688,31 @@ class BrainManager:
             parts.append(agentic_block)
         return "\n\n".join(p for p in parts if p)
 
-    def _resolve_project_execution_scope(
+    def _resolve_project_turn_context(
         self,
         *,
         user_text: str,
         conversation_id: str | None = None,
-    ) -> ProjectExecutionScope | None:
-        """Resolve immutable execution authority from canonical project state."""
+    ) -> tuple[str, ProjectExecutionScope | None]:
+        """Resolve one canonical snapshot for both prompt context and execution."""
 
         if self._project_turn_context is None:
-            return None
+            return "", None
         try:
             resolution = self._project_turn_context.resolve_turn(
                 user_text,
                 conversation_id=conversation_id,
             )
-            return project_execution_scope(resolution)
-        except Exception:  # noqa: BLE001 — routing metadata must not crash a turn
-            log.exception("project execution scope resolution failed unexpectedly")
-            return None
+            return render_project_context(resolution), project_execution_scope(resolution)
+        except Exception:  # noqa: BLE001 — project routing must not crash a turn
+            log.exception("project context resolution failed unexpectedly")
+            return (
+                "[PROJECT CONTEXT — CANONICAL STATE UNAVAILABLE]\n"
+                "Project context resolution failed. Do not reconstruct or "
+                "replace canonical project state from conversation history "
+                "or memory.",
+                None,
+            )
 
     def _build_project_turn_context(
         self,
@@ -4715,21 +4722,11 @@ class BrainManager:
     ) -> str:
         """Build N-12 structural project context for this user turn only."""
 
-        if self._project_turn_context is None:
-            return ""
-        try:
-            return self._project_turn_context.build_turn_block(
-                user_text,
-                conversation_id=conversation_id,
-            )
-        except Exception:  # noqa: BLE001 — project routing must not crash a turn
-            log.exception("project context resolution failed unexpectedly")
-            return (
-                "[PROJECT CONTEXT — CANONICAL STATE UNAVAILABLE]\n"
-                "Project context resolution failed. Do not reconstruct or "
-                "replace canonical project state from conversation history "
-                "or memory."
-            )
+        block, _scope = self._resolve_project_turn_context(
+            user_text=user_text,
+            conversation_id=conversation_id,
+        )
+        return block
 
     def _agentic_focus_block(self) -> str:
         """Workspace-awareness block while the Agentic IDE's focus mode is on.
@@ -11285,7 +11282,7 @@ class BrainManager:
         # N-13: resolve canonical execution authority before any mission fast
         # path can dispatch. Ambiguous/unavailable state yields no scope and is
         # never repaired from memory or conversation history.
-        project_scope = self._resolve_project_execution_scope(
+        project_context, project_scope = self._resolve_project_turn_context(
             user_text=user_text,
             conversation_id=conversation_id,
         )
@@ -11940,10 +11937,6 @@ class BrainManager:
         # message (keeping the cached system prompt stable); empty in legacy
         # mode. Reused for every provider in the fallback chain below.
         turn_context = self._build_turn_context()
-        project_context = self._build_project_turn_context(
-            user_text=user_text,
-            conversation_id=conversation_id,
-        )
         if project_context:
             turn_context = (
                 f"{turn_context}\n\n{project_context}"

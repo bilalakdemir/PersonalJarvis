@@ -145,6 +145,10 @@ class MissionManager:
     ) -> str:
         """Erzeuge eine neue Mission im PENDING-State. Returns `mission_id`."""
         self._ensure_started()
+        if task_id is not None and project_id is None:
+            raise ValueError("task_id requires project_id")
+        if (project_id is None) != (project_root is None):
+            raise ValueError("project_id and project_root must be provided together")
         mission_id = uuid7_str()
         ts = now_ms()
         env = EventEnvelope(
