@@ -433,6 +433,56 @@ class CandidateJournal:
                 )
             return out
 
+    def get(self, candidate_id: int) -> JournalRow | None:
+        """Return one exact candidate row by ID, regardless of terminal state."""
+
+        wanted = int(candidate_id)
+        if wanted <= 0:
+            return None
+        with self._lock:
+            conn = self._connection()
+            if conn is None:
+                return None
+            row = conn.execute(
+                "SELECT j.id, j.created_ms, j.source_label, j.turn_hash, j.fact, "
+                "j.kind, j.subjects, COALESCE(e.evidence_turn_id, ''), "
+                "COALESCE(x.evidence_excerpt, ''), "
+                "COALESCE(a.session_id, ''), COALESCE(c.review_key, ''), "
+                "j.status, COALESCE(b.basis, 'explicit'), "
+                "COALESCE(b.salience, 3) "
+                "FROM wiki_candidate_journal AS j "
+                "LEFT JOIN wiki_candidate_evidence AS e ON e.candidate_id = j.id "
+                "LEFT JOIN wiki_candidate_evidence_excerpt AS x "
+                "ON x.candidate_id = j.id "
+                "LEFT JOIN wiki_candidate_capture AS c ON c.candidate_id = j.id "
+                "LEFT JOIN wiki_extraction_audit AS a ON a.review_key = c.review_key "
+                "LEFT JOIN wiki_candidate_basis AS b ON b.candidate_id = j.id "
+                "WHERE j.id = ? LIMIT 1",
+                (wanted,),
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                subjects = normalise_subjects(json.loads(row[6]) or ())
+            except (TypeError, ValueError):
+                subjects = ()
+            return JournalRow(
+                id=row[0],
+                created_ms=row[1],
+                source_label=row[2],
+                turn_hash=row[3],
+                fact=row[4],
+                kind=row[5],
+                subjects=subjects,
+                evidence_turn_id=row[7],
+                evidence_excerpt=row[8],
+                session_id=row[9],
+                review_key=row[10],
+                status=row[11],
+                basis=row[12],
+                salience=int(row[13]),
+            )
+
     # ------------------------------------------------------------------
     # durable extraction-capture audit
     # ------------------------------------------------------------------
