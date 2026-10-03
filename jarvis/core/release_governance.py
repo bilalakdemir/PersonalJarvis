@@ -389,7 +389,11 @@ class ReleaseGovernanceStore:
         self._event(
             state,
             release_id,
-            "verification_passed" if manifest.stage is ReleaseStage.VERIFIED else "verification_failed",
+            (
+                "verification_passed"
+                if manifest.stage is ReleaseStage.VERIFIED
+                else "verification_failed"
+            ),
         )
         self.save(state)
         return state
@@ -408,7 +412,9 @@ class ReleaseGovernanceStore:
         state = self.load()
         manifest = self._manifest(state, release_id)
         if release_id in {state.current_production, state.previous_known_good}:
-            raise ReleaseGovernanceError("current or previous known-good release cannot be rejected")
+            raise ReleaseGovernanceError(
+                "current or previous known-good release cannot be rejected"
+            )
         manifest.stage = ReleaseStage.REJECTED
         self._event(state, release_id, "rejected", reason=reason)
         self.save(state)
