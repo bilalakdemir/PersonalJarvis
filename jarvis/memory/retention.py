@@ -245,7 +245,7 @@ class MemoryRetentionRuntime:
             try:
                 await task
             except asyncio.CancelledError:
-                pass
+                log.debug("Memory retention loop cancelled during shutdown")
         try:
             await asyncio.to_thread(self._journal.close)
         except Exception as exc:  # noqa: BLE001
