@@ -645,6 +645,62 @@ jobs:
       force: ${{ needs.detect.outputs.full == 'true' }}
       include_macos: ${{ needs.detect.outputs.macos == 'true' }}
 
+  # Personal Jarvis foundation invariant (N-19).
+  #
+  # The normal sharded suite still owns exhaustive regression coverage.  This
+  # focused gate makes the N-09..N-18 core contract explicit and non-optional:
+  # project authority -> governed execution -> governed memory -> canonical HUD
+  # -> release/rollback authority.  Keep it credential-free and deterministic
+  # so a green result is real release evidence rather than an external-service
+  # availability check.
+  personal-jarvis-core:
+    name: Personal Jarvis core gate
+    needs: detect
+    if: needs.detect.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install core test environment
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libportaudio2
+          python -m pip install -e ".[dev,telephony]"
+      - name: N-09 through N-18 core integration and regression contract
+        run: |
+          python -m pytest -q -p no:cacheprovider \
+            tests/unit/projects/test_project_state_read.py \
+            tests/unit/projects/test_project_state_transactions.py \
+            tests/unit/projects/test_project_context.py \
+            tests/unit/brain/test_project_delegation_wiring.py \
+            tests/unit/missions/test_project_delegation.py \
+            tests/unit/core/test_capabilities.py \
+            tests/unit/platform/test_permissions.py \
+            tests/unit/safety/test_tool_executor_capabilities.py \
+            tests/unit/safety/test_tool_executor_decision_log.py \
+            tests/integration/test_capability_coupling_e2e.py \
+            tests/unit/memory/test_governance.py \
+            tests/unit/memory/test_retention.py \
+            tests/unit/memory/test_project_state_proposal.py \
+            tests/unit/memory/test_project_state_planner.py \
+            tests/unit/memory/test_project_state_approval.py \
+            tests/unit/ui/hud/test_hud_adapter.py \
+            tests/unit/ui/hud/test_hud_reducer.py \
+            tests/integration/test_hud_transport.py \
+            tests/unit/brain/test_explicit_computer_use_routing.py \
+            tests/integration/test_realtime_delegate_mission_path.py \
+            tests/unit/ui/web/test_update_routes.py \
+            tests/integration/test_update_apply_real_git.py \
+            tests/unit/ui/test_relauncher_update_transaction.py \
+            tests/unit/core/test_release_governance.py
+
   # The ONE required check. Branch protection and the merge train read only
   # this; a new job needs nothing but a line in `needs`.
   gate:
@@ -667,6 +723,7 @@ jobs:
       - browser
       - macos-desktop
       - installer
+      - personal-jarvis-core
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
