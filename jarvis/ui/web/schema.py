@@ -69,6 +69,22 @@ class WSAudioLevel(BaseModel):
     output: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
+class WSHudSnapshot(BaseModel):
+    """The canonical HUD state (N-17), pushed on the existing ``/ws`` socket.
+
+    Pushed — coalesced — whenever something a viewer can see changed. A
+    (re)connecting window resyncs with ``GET /api/hud/snapshot`` on its
+    ``welcome`` instead of replaying events; ``epoch``/``revision`` inside the
+    snapshot order that read against these pushes. ``snapshot`` is
+    ``jarvis.ui.hud.models.HudSnapshot.to_dict()``: already secret-masked and
+    length-capped. Semantic state only; animation is
+    the client's job, so this frame never carries per-frame data.
+    """
+
+    type: Literal["hud.snapshot"] = "hud.snapshot"
+    snapshot: dict[str, Any] = Field(default_factory=dict)
+
+
 # ----------------------------------------------------------------------
 # Incoming (Client → Server)
 # ----------------------------------------------------------------------
