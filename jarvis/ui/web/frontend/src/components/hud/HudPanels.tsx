@@ -131,7 +131,14 @@ export function ApprovalCard({ card, t, nowMs }: { card: HudApproval; t: T; nowM
                   ]
                     .filter(Boolean)
                     .join(" · ")
-                : `${shortId(card.mission_id)} · ${shortId(card.trace_id)}`}
+                : card.kind === "memory_promotion"
+                  ? [
+                      card.candidate_id ? `#${card.candidate_id}` : null,
+                      shortId(card.proposal_digest),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : `${shortId(card.mission_id)} · ${shortId(card.trace_id)}`}
             </code>
           }
         />
