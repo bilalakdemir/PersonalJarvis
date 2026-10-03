@@ -4000,14 +4000,16 @@ class WebServer:
                 logger.warning("Society runtime cleanup incomplete ({})", society_shutdown_failure)
         self._mic_level_sessions.clear()
         self._stop_mic_level_bridge()
-        hud_task = self._hud_task
+        hud_task = getattr(self, "_hud_task", None)
         self._hud_task = None
         if hud_task is not None and not hud_task.done():
             hud_task.cancel()
-        try:
-            self._hud_unsubscribe()
-        except Exception as exc:  # noqa: BLE001 — shutdown must continue
-            logger.opt(exception=exc).debug("HUD listener removal failed")
+        hud_unsubscribe = getattr(self, "_hud_unsubscribe", None)
+        if callable(hud_unsubscribe):
+            try:
+                hud_unsubscribe()
+            except Exception as exc:  # noqa: BLE001 — shutdown must continue
+                logger.opt(exception=exc).debug("HUD listener removal failed")
 
         try:
             from jarvis.memory.learning.loop import stop_learning
