@@ -43,6 +43,7 @@ from jarvis.brain.project_context import (
 )
 from jarvis.brain.provider_registry import BrainProviderRegistry
 from jarvis.brain.streaming import aggregate, is_length_truncated
+from jarvis.core.memory_events import MemoryConflictDetected, PersistentMemoryChanged
 from jarvis.core.project_state_events import ProjectStateMemoryProposalRequested
 from jarvis.core.protocols import BrainMessage, BrainRequest, EventPublisher
 from jarvis.memory.governance import (
@@ -1131,6 +1132,11 @@ class Consolidator:
                     target_path=target,
                 )
                 await self._persistent_approval_applied(cid)
+                await self._publish_persistent_change(
+                    candidate_id=cid,
+                    decision=decision,
+                    target=target,
+                )
                 telemetry.inc(f"wiki_consolidator_{decision}")
             elif required & rejected_rel:
                 await self._mark([cid], status="rejected", target_path=target)
@@ -1167,6 +1173,33 @@ class Consolidator:
         item = await queue.get(candidate_id)
         if item is not None and item.status == "approved":
             await queue.mark_applied(candidate_id)
+
+    async def _publish_persistent_change(
+        self,
+        *,
+        candidate_id: int,
+        decision: str,
+        target: str,
+    ) -> None:
+        publisher = self._event_publisher
+        if publisher is None:
+            return
+        await publisher.publish(
+            PersistentMemoryChanged(
+                source_layer="memory",
+                candidate_id=candidate_id,
+                change_kind=decision,
+                target_ref=target,
+            )
+        )
+        if decision == "invalidate":
+            await publisher.publish(
+                MemoryConflictDetected(
+                    source_layer="memory",
+                    candidate_id=candidate_id,
+                    conflict_ref=target,
+                )
+            )
 
     async def _persistent_approval_failed(
         self,
