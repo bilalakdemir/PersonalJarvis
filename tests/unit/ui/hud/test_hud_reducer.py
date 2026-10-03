@@ -35,6 +35,18 @@ from jarvis.core.events import (
     TaskStarted,
     VoiceSessionStarted,
 )
+from jarvis.core.memory_events import (
+    MemoryCandidateCreated,
+    MemoryConflictDetected,
+    MemoryDeleted,
+    MemoryPreExpiryReviewRequired,
+    MemoryPromotionApproved,
+    MemoryPromotionProposed,
+    MemoryPromotionRejected,
+    PersistentMemoryChanged,
+    TemporaryMemoryExpired,
+    TemporaryMemoryStored,
+)
 from jarvis.core.project_state_events import (
     CurrentTaskChanged,
     ProjectContextResolved,
@@ -674,6 +686,138 @@ def test_broken_memory_mapper_fails_closed() -> None:
         assert snap(r).memory_activity == ()
     finally:
         unregister_memory_mapper("Weird")
+
+
+def test_governed_memory_lifecycle_projects_metadata_and_exact_approval() -> None:
+    r = HudReducer()
+    expires_ms = at(120) // 1_000_000
+    r.apply(
+        TemporaryMemoryStored(
+            item_id=4,
+            kind="research",
+            project_id="p1",
+            expires_ms=expires_ms,
+            timestamp_ns=at(1),
+        )
+    )
+    r.apply(
+        MemoryPreExpiryReviewRequired(
+            item_id=4,
+            kind="research",
+            project_id="p1",
+            expires_ms=expires_ms,
+            timestamp_ns=at(2),
+        )
+    )
+    r.apply(
+        MemoryCandidateCreated(
+            candidate_id=7,
+            kind="decision",
+            basis="explicit",
+            timestamp_ns=at(3),
+        )
+    )
+    r.apply(
+        MemoryPromotionProposed(
+            candidate_id=7,
+            proposal_digest="digest-7",
+            governance_class="user-wide-decision",
+            expires_ms=expires_ms,
+            timestamp_ns=at(4),
+        )
+    )
+    r.apply(
+        MemoryPromotionProposed(
+            candidate_id=8,
+            proposal_digest="digest-8",
+            governance_class="operating-rule",
+            expires_ms=expires_ms,
+            timestamp_ns=at(4.1),
+        )
+    )
+
+    before = snap(r, 5)
+    assert before.primary_state == "WAITING_FOR_APPROVAL"
+    assert {card.approval_id for card in before.approval_requests} == {
+        "memory_promotion:7:digest-7",
+        "memory_promotion:8:digest-8",
+    }
+    card = next(c for c in before.approval_requests if c.candidate_id == 7)
+    assert card.kind == "memory_promotion"
+    assert card.decision_channel == "none"
+    assert card.proposal_digest == "digest-7"
+
+    r.apply(
+        MemoryPromotionApproved(
+            candidate_id=7,
+            proposal_digest="digest-7",
+            timestamp_ns=at(6),
+        )
+    )
+    after = snap(r, 7)
+    assert [c.candidate_id for c in after.approval_requests] == [8]
+    assert any(m.kind == "promotion_approved" and m.candidate_id == 7 for m in after.memory_activity)
+
+
+def test_governed_memory_reject_before_proposal_prevents_late_card() -> None:
+    r = HudReducer()
+    r.apply(
+        MemoryPromotionRejected(
+            candidate_id=7,
+            proposal_digest="digest-7",
+            reason="user-rejected",
+            timestamp_ns=at(2),
+        )
+    )
+    r.apply(
+        MemoryPromotionProposed(
+            candidate_id=7,
+            proposal_digest="digest-7",
+            governance_class="operating-rule",
+            expires_ms=at(100) // 1_000_000,
+            timestamp_ns=at(1),
+        )
+    )
+    assert snap(r, 3).approval_requests == ()
+
+
+def test_governed_memory_terminal_events_never_expose_bodies() -> None:
+    r = HudReducer()
+    r.apply(
+        PersistentMemoryChanged(
+            candidate_id=7,
+            change_kind="update",
+            target_ref="decisions/project",
+            timestamp_ns=at(1),
+        )
+    )
+    r.apply(
+        MemoryConflictDetected(
+            candidate_id=7,
+            conflict_ref="decisions/project",
+            timestamp_ns=at(2),
+        )
+    )
+    r.apply(
+        TemporaryMemoryExpired(
+            item_id=4,
+            kind="research",
+            project_id="p1",
+            timestamp_ns=at(3),
+        )
+    )
+    r.apply(
+        MemoryDeleted(
+            memory_kind="candidate",
+            memory_id="7",
+            reason="retention-expired",
+            timestamp_ns=at(4),
+        )
+    )
+    wire = repr(snap(r, 5).to_dict())
+    assert "decisions/project" in wire
+    assert "candidate:7" in wire
+    assert "content" not in wire.lower()
 
 
 # ------------------------------------------------------------------------------ privacy
