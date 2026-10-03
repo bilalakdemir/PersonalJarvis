@@ -156,6 +156,12 @@ const VisualizationView = lazyView(() =>
     default: m.VisualizationView,
   })),
 );
+// The HUD workspace (N-17): the reactor plus contextual panels, projected
+// from the canonical backend HUD snapshot. Read-only except for one approval
+// card at a time through its owning domain's route.
+const HudView = lazyView(() =>
+  import("@/views/HudView").then((m) => ({ default: m.HudView })),
+);
 const MarketplaceView = lazyView(() =>
   import("@/views/MarketplaceView").then((m) => ({
     default: m.MarketplaceView,
@@ -530,6 +536,8 @@ function SwitchOnActiveSection({ active }: { active: string }) {
     // place, installable without leaving the app.
     case "marketplace":
       return <MarketplaceView />;
+    case "hud":
+      return <HudView />;
     // Deliberately nothing: the coding workspace is rendered by the STICKY
     // branch in `MainView` above, which keeps it mounted across section
     // changes. This switch is not rendered at all while one of those ids is
