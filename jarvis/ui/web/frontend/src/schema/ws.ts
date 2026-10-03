@@ -38,6 +38,16 @@ export const WSAudioLevel = z.object({
 });
 export type WSAudioLevelT = z.infer<typeof WSAudioLevel>;
 
+/** The canonical HUD snapshot (N-17), pushed when something visible changed.
+ *  Field names match `jarvis.ui.web.schema.WSHudSnapshot`. The snapshot body
+ *  is validated structurally by `lib/hudSemantics.parseHudSnapshot` — kept
+ *  out of zod here so this startup-chunk schema stays small. */
+export const WSHudSnapshot = z.object({
+  type: z.literal("hud.snapshot"),
+  snapshot: z.record(z.unknown()),
+});
+export type WSHudSnapshotT = z.infer<typeof WSHudSnapshot>;
+
 /** Free-form user text / voice message heading inward. */
 export const WSMessageIn = z.object({
   type: z.literal("message"),
@@ -85,5 +95,6 @@ export const WSOutbound = z.discriminatedUnion("type", [
   WSEventEnvelope,
   WSWelcome,
   WSAudioLevel,
+  WSHudSnapshot,
   WSTerminalSpawned,
 ]);

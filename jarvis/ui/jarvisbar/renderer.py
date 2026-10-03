@@ -18,6 +18,12 @@ State → look:
 - ``notice``  → a breathing red cross in an opened pill: something the user
                asked for did not happen. The bar carries no text, so this look
                IS the message on this surface.
+- ``work``    → the sweep in the OPEN pill: background work is in flight (HUD
+               snapshot WORKING) while no conversation holds the bar. Smaller
+               than a live turn so the two never read as each other.
+- ``attention`` → an opened pill with a breathing amber rim and three amber
+               dots: something is waiting on the user (a pending approval in
+               the canonical HUD snapshot) while no conversation holds the bar.
 
 Gold only appears during activity; idle dots stay muted.
 """
@@ -34,9 +40,12 @@ from PIL import Image, ImageDraw
 # (AP-4). ``MODES`` is re-exported here because every surface already validates
 # against ``renderer.MODES``.
 from jarvis.ui.jarvisbar.modes import (  # noqa: F401 — re-exported as renderer.MODES
+    ATTENTION_MODES,
     DICTATION_MODES,
+    HUD_MODES,
     MODES,
     NOTICE_MODES,
+    WORK_MODES,
 )
 
 COLOR_KEY_RGB = (255, 0, 255)
@@ -200,6 +209,25 @@ def drop_rim_color(
 # a keypress, not an alarm.
 NOTICE_PULSE_RAD_S = 3.4
 NOTICE_ALPHA_MIN = 0.55
+
+
+# --- the `attention` look: "something is waiting on you" ----------------------
+# Raised by the HUD projection, never by the voice lane, and only while nothing
+# else holds the bar. It must be legible from the corner of the eye (an opened
+# pill, an amber rim) yet clearly NOT a failure (no cross, no red) and clearly
+# NOT a live session (no equalizer, no sweep). Its breath is slower than the
+# notice's and never fades below a readable floor: a state that persists until
+# the user acts must not look like a frozen frame or vanish into the rest pill.
+ATTENTION_RIM = (255, 190, 72)
+ATTENTION_DOTS = 3
+ATTENTION_PULSE_RAD_S = 2.2
+ATTENTION_PULSE_MIN = 0.45
+
+
+def attention_pulse(t: float) -> float:
+    """Rim/dot intensity of the ``attention`` look at ``t`` (pure, in [MIN, 1])."""
+    pulse = 0.5 + 0.5 * math.sin(t * ATTENTION_PULSE_RAD_S)
+    return ATTENTION_PULSE_MIN + (1.0 - ATTENTION_PULSE_MIN) * pulse
 
 
 def notice_alpha(t: float) -> float:
@@ -560,7 +588,14 @@ def target_pill_size(
     it off) needs the OPEN pill's room to be legible and clickable."""
     if mode in ("listen", "speak", "think") or mode in DICTATION_MODES:
         return ACTIVE_W, ACTIVE_H
-    if hovered or muted or drop_open or prompt_mode or mode in NOTICE_MODES:
+    if (
+        hovered
+        or muted
+        or drop_open
+        or prompt_mode
+        or mode in NOTICE_MODES
+        or mode in HUD_MODES
+    ):
         return OPEN_W, OPEN_H
     return COLLAPSED_W, COLLAPSED_H
 
@@ -641,6 +676,11 @@ def visual_mode(
     replace the answer to the user's key press with a lie about the microphone.
     """
     if coarse_mode in NOTICE_MODES:
+        return coarse_mode
+    if coarse_mode in HUD_MODES:
+        # The HUD background looks ignore audio for the same reason: no
+        # session is live, so a stray level sample (or the tail of a previous
+        # reply) must not repaint background work as listening or speaking.
         return coarse_mode
     if coarse_mode == "idle":
         return "idle"
@@ -799,6 +839,7 @@ class JarvisBarRenderer:
         # active/idle split because it is neither: nothing is running, but the
         # pill is not at rest either.
         notice = mode in NOTICE_MODES
+        attention = mode in ATTENTION_MODES
         # Drag-drop feedback. ``drop_state`` is what the surface currently sees
         # (a hovering payload, or the verdict of one that landed) and
         # ``drop_elapsed`` how long the verdict has been up; the glyph's own
@@ -856,6 +897,10 @@ class JarvisBarRenderer:
             # is the reason the pill opened. A drop verdict in flight still
             # wins, because the user is looking at the payload they just let go.
             outline_color = MUTED_RED
+        elif attention and not confirming and not muted:
+            # Waiting on the user. The muted rim keeps priority: "Jarvis cannot
+            # hear you" is the more urgent fact about the bar itself.
+            outline_color = _lerp_rgb(PILL_BORDER, ATTENTION_RIM, attention_pulse(t))
         d.rounded_rectangle(
             [cx - pw / 2, cy - ph / 2, cx + pw / 2, cy + ph / 2],
             radius=ph / 2,
@@ -926,6 +971,28 @@ class JarvisBarRenderer:
             self._draw_thinking(d, t, cx, cy, pw, ph)
         elif mode in ("listen", "speak"):
             self._draw_bars(d, t, cx, cy, pw, ph)
+        elif mode in WORK_MODES:
+            # Background work: the thinking sweep, narrower, in the OPEN pill.
+            self._draw_thinking(
+                d, t, cx, cy, pw, ph,
+                span=bars_span_for(pw) * 0.5,
+                n=THINK_HOVER_BARS,
+            )
+            if muted:
+                self._draw_mic(img, x_right, cy, ph, muted=True)
+        elif attention:
+            self._draw_dots(
+                img,
+                cx,
+                cy,
+                pw,
+                ph,
+                color=_lerp_rgb(DOT_COLOR, ATTENTION_RIM, attention_pulse(t)),
+                n=ATTENTION_DOTS,
+                span_frac=_DOTS_SPAN_FRAC * 0.35,
+            )
+            if muted:
+                self._draw_mic(img, x_right, cy, ph, muted=True)
         elif muted or prompt_mode:
             # Standby with a state worth seeing (idle, not hovered). Muted:
             # always show the slashed mic so the user sees at a glance they're
@@ -943,7 +1010,16 @@ class JarvisBarRenderer:
         return img
 
     def _draw_dots(
-        self, img: Image.Image, cx: float, cy: float, pw: float, ph: float
+        self,
+        img: Image.Image,
+        cx: float,
+        cy: float,
+        pw: float,
+        ph: float,
+        *,
+        color: tuple[int, int, int] = DOT_COLOR,
+        n: int = _N_DOTS,
+        span_frac: float = _DOTS_SPAN_FRAC,
     ) -> None:
         # Supersample the dots: at this tiny resolution a 3 px circle drawn
         # directly renders as a cross. Draw at 4x on a transparent layer, then
@@ -952,9 +1028,9 @@ class JarvisBarRenderer:
         r = max(1.5, ph * _DOT_R_FRAC) * ss
         layer = Image.new("RGBA", (img.width * ss, img.height * ss), (0, 0, 0, 0))
         ld = ImageDraw.Draw(layer)
-        for x in evenly_spaced(cx, _DOTS_SPAN_FRAC * pw, _N_DOTS):
+        for x in evenly_spaced(cx, span_frac * pw, n):
             px, py = x * ss, cy * ss
-            ld.ellipse([px - r, py - r, px + r, py + r], fill=(*DOT_COLOR, 255))
+            ld.ellipse([px - r, py - r, px + r, py + r], fill=(*color, 255))
         small = layer.resize(img.size, Image.Resampling.LANCZOS)
         img.paste(small, (0, 0), small)
 

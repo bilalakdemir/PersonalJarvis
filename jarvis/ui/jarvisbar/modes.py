@@ -47,5 +47,23 @@ DICTATION_MODES: tuple[str, ...] = ("dictate", "dictate_transcribing")
 #:   transient message is not a control.
 NOTICE_MODES: tuple[str, ...] = ("notice",)
 
+#: HUD background modes (N-16). Painted ONLY by the HUD projection
+#: (``ui.orb.hud_projection``) from the canonical HudSnapshot, and only on a
+#: persistent bar while the voice lane is at rest — never over a live turn,
+#: never to reveal a surface that hides when idle. Neither is a voice mode (no
+#: session is live: no close-X, no mute-zone change — a click resolves exactly
+#: like ``idle``), neither is a notice (nothing failed, and neither clears
+#: itself: it lasts exactly as long as the snapshot says so).
+#:
+#: - ``work``      — background work is in flight (a mission, a worker, a
+#:   scheduled task, Computer Use). The sweep, in the OPEN pill: the same
+#:   "work in flight" stroke vocabulary as thinking, but visibly smaller than a
+#:   live turn so the two are never confused.
+#: - ``attention`` — something is waiting on the user (a pending approval). An
+#:   opened pill with a breathing amber rim and three dots.
+WORK_MODES: tuple[str, ...] = ("work",)
+ATTENTION_MODES: tuple[str, ...] = ("attention",)
+HUD_MODES: tuple[str, ...] = WORK_MODES + ATTENTION_MODES
+
 #: Every mode a surface accepts. Anything else is dropped by ``show()``.
-MODES: tuple[str, ...] = VOICE_MODES + DICTATION_MODES + NOTICE_MODES
+MODES: tuple[str, ...] = VOICE_MODES + DICTATION_MODES + NOTICE_MODES + HUD_MODES

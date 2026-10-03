@@ -117,6 +117,11 @@ class Motion:
 #:   shimmering as though it were still hearing something.
 #: * ``notice`` — something the user asked for did not happen. Quiet and dim,
 #:   clearly awake but clearly not listening.
+#: * ``work`` — HUD background work while no conversation is live (N-16): the
+#:   thinking weather at a calmer pace, so a long mission reads as "busy" without
+#:   ever being mistaken for a live turn. No live feed.
+#: * ``attention`` — HUD "something waits on you" (a pending approval): almost
+#:   no flow, a deeper and steadier breath. No live feed.
 MOTIONS: dict[str, Motion] = {
     "idle": Motion(0.025, 0.008, 0.004, 0.14, 0.8, 0.86, 0.0, 0.28),
     "listen": Motion(0.11, 0.035, 0.016, 0.72, 1.02, 0.98, 0.0, 0.34),
@@ -129,6 +134,8 @@ MOTIONS: dict[str, Motion] = {
     "dictate": Motion(0.11, 0.035, 0.016, 0.72, 1.02, 0.98, 0.0, 0.34),
     "dictate_transcribing": Motion(0.95, -0.44, 0.010, 0.34, 1.85, 1.08, 0.0, 1.45),
     "notice": Motion(0.012, 0.0, 0.003, 0.12, 0.7, 0.72, 0.0, 0.28),
+    "work": Motion(0.42, -0.18, 0.008, 0.28, 1.35, 0.95, 0.0, 0.8),
+    "attention": Motion(0.03, 0.01, 0.018, 0.55, 0.85, 1.0, 0.0, 0.32),
 }
 
 #: Modes that react to a live level. ``speak`` is here because the bridge

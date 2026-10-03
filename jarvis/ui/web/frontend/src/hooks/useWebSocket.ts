@@ -27,7 +27,8 @@ import {
 import { useDeckStore } from "@/store/deck";
 import { useHomeStore } from "@/store/home";
 import { PANE_ACTIVITY_EVENT } from "@/store/workspacePanes";
-import { WSAudioLevel, WSEventEnvelope, WSWelcome } from "@/schema/ws";
+import { WSAudioLevel, WSEventEnvelope, WSHudSnapshot, WSWelcome } from "@/schema/ws";
+import { refreshHudSnapshot, useHudStore } from "@/store/hud";
 import { useI18nStore, hydrateUiLanguage, hydrateReplyLanguage, translate } from "@/i18n";
 import { hydrateUiTheme } from "@/hooks/useTheme";
 import { announceDictationSettings } from "@/hooks/usePromptMode";
@@ -112,6 +113,17 @@ export function useWebSocket(): void {
           // authoritative "backend is up" signal — useAssistantNameSeed
           // listens for this event and re-fetches the resolved name.
           window.dispatchEvent(new CustomEvent("jarvis:assistant-name-changed"));
+          // Resync the canonical HUD state on EVERY (re)connect — startup,
+          // reconnect, reload, resume — with one read instead of replaying
+          // history. Pushed frames and this read are ordered by
+          // (epoch, revision) in the store, so neither can roll the other back.
+          void refreshHudSnapshot();
+          return;
+        }
+
+        const hudFrame = WSHudSnapshot.safeParse(raw);
+        if (hudFrame.success) {
+          useHudStore.getState().applySnapshot(hudFrame.data.snapshot);
           return;
         }
 

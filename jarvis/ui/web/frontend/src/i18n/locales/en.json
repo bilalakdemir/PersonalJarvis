@@ -169,7 +169,8 @@
     "voice": "{name} Voice",
     "voice_shortcuts": "Shortcuts",
     "voice_language": "Language",
-    "voice_api_keys": "API Keys"
+    "voice_api_keys": "API Keys",
+    "hud": "HUD"
   },
   "agent_instructions": {
     "subtitle": "Your personal preferences for how the assistant works with you — tone, language, defaults, standing facts. Separate from the System Prompt, and it never overrides safety or confirmations.",
@@ -6056,5 +6057,95 @@
     "save_error": "Could not save: {0}",
     "toast_refused": "No appshot: {0}",
     "chip_label": "Appshot added to your message"
+  },
+  "hud": {
+    "title": "HUD",
+    "loading": "Loading the HUD…",
+    "quiet": "Nothing is running and nothing is waiting on you.",
+    "state": {
+      "idle": "Idle",
+      "listening": "Listening",
+      "thinking": "Thinking",
+      "working": "Working",
+      "waiting_for_approval": "Waiting for your approval",
+      "speaking": "Speaking",
+      "error": "Error"
+    },
+    "connection": {
+      "connected": "Connected",
+      "reconnecting": "Reconnecting…",
+      "disconnected": "Disconnected"
+    },
+    "attention": {
+      "approval": "Approval waiting",
+      "working": "Background work",
+      "error": "Error reported"
+    },
+    "panel": {
+      "approvals": "Approvals",
+      "project": "Active project",
+      "activity": "Missions & agents",
+      "computer": "Computer use",
+      "memory": "Memory activity",
+      "error": "Last error",
+      "conversation": "Conversation"
+    },
+    "approval": {
+      "target": "Target",
+      "project": "Project",
+      "reason": "Reason",
+      "risk": "Risk",
+      "expires": "Expires in",
+      "identity": "Request",
+      "approve": "Approve",
+      "deny": "Deny",
+      "read_only": {
+        "no_out_of_band_route": "This request can only be answered where it was asked.",
+        "answered_in_chat": "Answer this request in its chat.",
+        "project_state_route_unavailable": "Project-state changes cannot be approved from the HUD yet."
+      }
+    },
+    "project": {
+      "current": "CURRENT",
+      "no_current": "No current task",
+      "revision": "Revision",
+      "invalid": "Project state needs attention:"
+    },
+    "activity": {
+      "agents": "Missions and agents",
+      "operations": "Operations"
+    },
+    "status": {
+      "running": "running",
+      "completed": "done",
+      "failed": "failed",
+      "cancelled": "cancelled"
+    },
+    "computer": {
+      "control": "Control",
+      "in_control": "{name} is controlling this computer",
+      "released": "Released",
+      "phase": "Phase",
+      "action": "Last action",
+      "capture": "Screen capture"
+    },
+    "memory": {
+      "memory_updated": "Memory updated",
+      "profile_updated": "Profile updated",
+      "wiki_page": "Wiki page"
+    },
+    "error_scope": {
+      "global": "{name}",
+      "operation": "Operation",
+      "agent": "Agent",
+      "project": "Project",
+      "component": "Component"
+    },
+    "conversation": {
+      "empty": "No conversation yet.",
+      "open": "Open chat",
+      "user": "You",
+      "assistant": "{name}"
+    }
   }
 }

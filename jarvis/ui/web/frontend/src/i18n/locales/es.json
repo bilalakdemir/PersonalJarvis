@@ -169,7 +169,8 @@
     "voice": "Voz de {name}",
     "voice_shortcuts": "Atajos",
     "voice_language": "Idioma",
-    "voice_api_keys": "Claves API"
+    "voice_api_keys": "Claves API",
+    "hud": "HUD"
   },
   "agent_instructions": {
     "subtitle": "Tus preferencias personales sobre cómo el asistente trabaja contigo — tono, idioma, valores por defecto, hechos permanentes. Separado del System Prompt y nunca anula la seguridad ni las confirmaciones.",
@@ -6023,5 +6024,95 @@
     "save_error": "No se pudo guardar: {0}",
     "toast_refused": "Sin appshot: {0}",
     "chip_label": "Appshot añadido a tu mensaje"
+  },
+  "hud": {
+    "title": "HUD",
+    "loading": "Cargando el HUD…",
+    "quiet": "No hay nada en marcha ni nada esperándote.",
+    "state": {
+      "idle": "En reposo",
+      "listening": "Escuchando",
+      "thinking": "Pensando",
+      "working": "Trabajando",
+      "waiting_for_approval": "Esperando tu aprobación",
+      "speaking": "Hablando",
+      "error": "Error"
+    },
+    "connection": {
+      "connected": "Conectado",
+      "reconnecting": "Reconectando…",
+      "disconnected": "Desconectado"
+    },
+    "attention": {
+      "approval": "Aprobación pendiente",
+      "working": "Trabajo en segundo plano",
+      "error": "Error notificado"
+    },
+    "panel": {
+      "approvals": "Aprobaciones",
+      "project": "Proyecto activo",
+      "activity": "Misiones y agentes",
+      "computer": "Control del equipo",
+      "memory": "Actividad de memoria",
+      "error": "Último error",
+      "conversation": "Conversación"
+    },
+    "approval": {
+      "target": "Destino",
+      "project": "Proyecto",
+      "reason": "Motivo",
+      "risk": "Riesgo",
+      "expires": "Caduca en",
+      "identity": "Solicitud",
+      "approve": "Aprobar",
+      "deny": "Rechazar",
+      "read_only": {
+        "no_out_of_band_route": "Esta solicitud solo puede responderse donde se planteó.",
+        "answered_in_chat": "Responde a esta solicitud en su chat.",
+        "project_state_route_unavailable": "Los cambios de estado del proyecto aún no se pueden aprobar desde el HUD."
+      }
+    },
+    "project": {
+      "current": "ACTUAL",
+      "no_current": "Sin tarea actual",
+      "revision": "Revisión",
+      "invalid": "El estado del proyecto necesita atención:"
+    },
+    "activity": {
+      "agents": "Misiones y agentes",
+      "operations": "Operaciones"
+    },
+    "status": {
+      "running": "en curso",
+      "completed": "hecho",
+      "failed": "falló",
+      "cancelled": "cancelado"
+    },
+    "computer": {
+      "control": "Control",
+      "in_control": "{name} está controlando este equipo",
+      "released": "Liberado",
+      "phase": "Fase",
+      "action": "Última acción",
+      "capture": "Captura de pantalla"
+    },
+    "memory": {
+      "memory_updated": "Memoria actualizada",
+      "profile_updated": "Perfil actualizado",
+      "wiki_page": "Página wiki"
+    },
+    "error_scope": {
+      "global": "{name}",
+      "operation": "Operación",
+      "agent": "Agente",
+      "project": "Proyecto",
+      "component": "Componente"
+    },
+    "conversation": {
+      "empty": "Todavía no hay conversación.",
+      "open": "Abrir chat",
+      "user": "Tú",
+      "assistant": "{name}"
+    }
   }
 }

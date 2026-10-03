@@ -74,6 +74,8 @@ KNOWN: frozenset[str] = frozenset(
         # The marketplace, in the app: community plugins, skills and wallpapers
         # in one storefront.
         "marketplace",
+        # The HUD workspace (N-17): what Jarvis is doing right now.
+        "hud",
     }
 )
 
@@ -266,6 +268,10 @@ _ALIASES: dict[str, str] = {
     "marktplatz": "marketplace",  # i18n-allow: input vocab
     "mercado": "marketplace",  # i18n-allow: input vocab
     "tienda": "marketplace",  # i18n-allow: input vocab
+    # The HUD workspace. Spoken in full more often than as the acronym.
+    "heads up display": "hud",
+    "heads-up display": "hud",
+    "head-up-display": "hud",
 }
 
 

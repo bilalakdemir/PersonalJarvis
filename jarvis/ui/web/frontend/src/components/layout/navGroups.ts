@@ -33,6 +33,7 @@ import {
   Wallet,
   Workflow,
   Image as ImageIcon,
+  Crosshair,
   ScanLine,
   ShieldCheck,
   type LucideIcon,
@@ -127,6 +128,9 @@ export const NAV_GROUPS: NavItem[][] = [
   [{ id: "chats", labelKey: "nav.chats", icon: MessageSquare }],
   // 1) Workspace — what the user builds with and reads back.
   [
+    // The HUD workspace (N-17): what Jarvis is doing right now — reactor,
+    // approvals, active project, missions and agents — at one glance.
+    { id: "hud", labelKey: "nav.hud", icon: Crosshair, fallbackLabel: "HUD" },
     { id: "agents", labelKey: "nav.agents", icon: Users },
     // The compact catalog opens on Plugins; direct section navigation selects
     // its corresponding tab and keeps this shared row highlighted.

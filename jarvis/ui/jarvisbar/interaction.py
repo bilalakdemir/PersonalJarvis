@@ -109,6 +109,11 @@ def resolve_click(
     WHILE a conversation is live (a refused dictation says so mid-session), and
     the "not active → talk" fall-through would then fire a second session on a
     bar the user could not see the truth of.
+
+    The HUD background modes (``work``, ``attention``) deliberately have no
+    branch: they are painted only while no session is live, so they resolve
+    exactly like ``idle`` — the mic zone mutes, the body talks. An approval
+    cannot be answered from the bar; it is answered on its own card.
     """
     frac = x / max(1, width)
     if mode in NOTICE_MODES:
