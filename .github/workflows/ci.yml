@@ -468,6 +468,12 @@ jobs:
       - name: Startup bundle budget
         working-directory: ${{ github.workspace }}
         run: python3 scripts/ci/check_frontend_bundle_budget.py
+      - name: Upload built frontend dist (temporary HUD integration artifact)
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: hud-frontend-dist
+          path: jarvis/ui/web/dist
+          retention-days: 1
 
   jarvisctl:
     needs: detect
