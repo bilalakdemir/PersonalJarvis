@@ -52,6 +52,7 @@ from .fast_bootstrap import ASSET_SUFFIXES
 from .schema import (
     WSAudioLevel,
     WSCommand,
+    WSHudSnapshot,
     WSMessageIn,
     WSWelcome,
     event_to_ws_envelope,
@@ -196,6 +197,16 @@ class WebServer:
         # lives below the web layer (same pattern as the supervisor gateway).
         self._mission_tool_auto_approver = MissionToolAutoApprover(self.bus)
         runtime_refs.set_mission_tool_auto_approver(self._mission_tool_auto_approver)
+        # N-17: the ONE canonical HUD state for this bus (shared with the
+        # desktop overlay through ``hud_adapter_for``). Read-only projection;
+        # constructing it is a dict and one wildcard subscription (AP-26).
+        from jarvis.ui.hud import hud_adapter_for
+
+        self._hud = hud_adapter_for(self.bus)
+        self._hud_latest_frame: dict[str, Any] | None = None
+        self._hud_frame_revision = 0
+        self._hud_task: asyncio.Task[None] | None = None
+        self._hud_unsubscribe = self._hud.add_listener(self._queue_hud_snapshot)
         self.app: FastAPI = self._build_app()
         self.app.state.refresh_scheduler = None
 
@@ -356,6 +367,7 @@ class WebServer:
         from .contacts_routes import router as contacts_router
         from .control_routes import router as control_router
         from .costs_routes import router as costs_router
+        from .hud_routes import router as hud_router
         from .deck_routes import router as deck_router
         from .desktop_routes import router as desktop_router
         from .diagnostics_routes import router as diagnostics_router
@@ -493,6 +505,8 @@ class WebServer:
         app.include_router(cli_router)
         # Spend & Tokens — a read model over sessions/missions/agent-chat.
         app.include_router(costs_router)
+        # N-17 HUD workspace: read-only snapshot for reconnect/reload/resume.
+        app.include_router(hud_router)
         # Command Registry — the one machine-readable catalog of app commands
         # (consumed by the app-command brain tool, the UI, CLI, and docs gen).
         app.include_router(commands_router)
@@ -666,6 +680,8 @@ class WebServer:
         # skills_routes). Other routes will use it too going forward.
         app.state.config = self.cfg
         app.state.bus = self.bus
+        # Read-only HUD projection for GET /api/hud/snapshot.
+        app.state.hud = self._hud
 
         # Voice boot-readiness mirror. WS events are one-shot, so a tab that
         # connects after warm-up finished would never see VoiceBootStatus.
@@ -1864,6 +1880,77 @@ class WebServer:
                         "Microphone level socket close failed",
                         session_id=session_id,
                     )
+
+    # ------------------------------------------------------------------
+    # HUD snapshot transport (N-17)
+    # ------------------------------------------------------------------
+
+    def _queue_hud_snapshot(self, snapshot: Any) -> None:
+        """HUD adapter listener: coalesce into at most one pending broadcast.
+
+        Resync is NOT pushed here: like ``/api/voice/status``, a window that
+        (re)connects reads ``GET /api/hud/snapshot`` on its welcome frame, and
+        the ``epoch``/``revision`` pair orders that read against these pushes.
+        Keeping the welcome the only unsolicited frame preserves the frame
+        order every existing client and test relies on.
+
+        The adapter already coalesces to semantic changes; this keeps a slow
+        socket from queueing a backlog — only the freshest snapshot is sent.
+        """
+        try:
+            self._hud_latest_frame = WSHudSnapshot(snapshot=snapshot.to_dict()).model_dump()
+        except Exception as exc:  # noqa: BLE001 — a projection bug must not reach the bus
+            logger.opt(exception=exc).warning("HUD snapshot serialization failed")
+            return
+        self._hud_frame_revision += 1
+        if not self._clients:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no loop (constructor/test context) — the next connect resyncs
+        if self._hud_task is None or self._hud_task.done():
+            self._hud_task = asyncio.create_task(self._drain_hud_snapshots())
+
+    async def _drain_hud_snapshots(self) -> None:
+        sent_revision = -1
+        try:
+            while self._clients and sent_revision != self._hud_frame_revision:
+                sent_revision = self._hud_frame_revision
+                frame = self._hud_latest_frame
+                if frame is None:
+                    return
+                await asyncio.gather(
+                    *(
+                        self._send_hud_frame(session_id, frame)
+                        for session_id in tuple(self._clients)
+                    )
+                )
+        finally:
+            if self._hud_task is asyncio.current_task():
+                self._hud_task = None
+
+    async def _send_hud_frame(self, session_id: str, frame: dict[str, Any]) -> None:
+        ws = self._clients.get(session_id)
+        send_lock = self._client_send_locks.get(session_id)
+        if ws is None or send_lock is None:
+            return
+
+        async def _send() -> None:
+            async with send_lock:
+                if self._clients.get(session_id) is ws:
+                    await ws.send_json(frame)
+
+        try:
+            await asyncio.wait_for(_send(), timeout=_WS_SEND_TIMEOUT_S)
+        except TimeoutError:
+            # Superseded by the next snapshot; a wedged tab is dropped by the
+            # event forwarder's own stall guard (AP-18), not here.
+            logger.debug("HUD snapshot send timed out", session_id=session_id)
+        except WebSocketDisconnect:  # the tab left: drop it exactly like the level sender
+            self._remove_ws_client(session_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=exc).debug("HUD snapshot send failed", session_id=session_id)
 
     async def _route_incoming(
         self,
@@ -3144,6 +3231,13 @@ class WebServer:
         if ws_mgr is not None:
             result["manager"].bus.subscribe_all(ws_mgr.fanout)
 
+        # N-15: project missions/workers into the HUD (read-only tap on the
+        # existing MissionBus — its envelopes never reach the global bus).
+        try:
+            self._hud.attach_mission_bus(result["manager"].bus)
+        except Exception as exc:  # noqa: BLE001 — the HUD is optional
+            logger.opt(exception=exc).warning("HUD mission-bus tap failed")
+
         # Welle-4 follow-up: bridge MissionBus -> SubAgentRegistry so the
         # Sub-Agents board lights up. The legacy publishers for
         # JarvisAgentTaskStarted/Completed were removed in the migration; without
@@ -3906,6 +4000,14 @@ class WebServer:
                 logger.warning("Society runtime cleanup incomplete ({})", society_shutdown_failure)
         self._mic_level_sessions.clear()
         self._stop_mic_level_bridge()
+        hud_task = self._hud_task
+        self._hud_task = None
+        if hud_task is not None and not hud_task.done():
+            hud_task.cancel()
+        try:
+            self._hud_unsubscribe()
+        except Exception as exc:  # noqa: BLE001 — shutdown must continue
+            logger.opt(exception=exc).debug("HUD listener removal failed")
 
         try:
             from jarvis.memory.learning.loop import stop_learning
