@@ -79,6 +79,18 @@ from jarvis.core.events import (
     WorkflowStarted,
     WorkflowStepStarted,
 )
+from jarvis.core.memory_events import (
+    MemoryCandidateCreated,
+    MemoryConflictDetected,
+    MemoryDeleted,
+    MemoryPreExpiryReviewRequired,
+    MemoryPromotionApproved,
+    MemoryPromotionProposed,
+    MemoryPromotionRejected,
+    PersistentMemoryChanged,
+    TemporaryMemoryExpired,
+    TemporaryMemoryStored,
+)
 from jarvis.core.project_state_events import (
     CurrentTaskChanged,
     ProjectContextResolved,
@@ -372,6 +384,16 @@ class HudReducer:
             ProjectStateTransactionRejected: self._on_project_transaction_closed,
             ProjectStateTransactionFailed: self._on_project_transaction_closed,
             ProjectStateRolledBack: self._on_project_transaction_closed,
+            TemporaryMemoryStored: self._on_temporary_memory_stored,
+            MemoryPreExpiryReviewRequired: self._on_memory_pre_expiry_review,
+            TemporaryMemoryExpired: self._on_temporary_memory_expired,
+            MemoryCandidateCreated: self._on_memory_candidate_created,
+            MemoryPromotionProposed: self._on_memory_promotion_proposed,
+            MemoryPromotionApproved: self._on_memory_promotion_decision,
+            MemoryPromotionRejected: self._on_memory_promotion_decision,
+            PersistentMemoryChanged: self._on_persistent_memory_changed,
+            MemoryConflictDetected: self._on_memory_conflict_detected,
+            MemoryDeleted: self._on_memory_deleted,
             MemoryUpdated: self._on_memory_updated,
             ProfileUpdated: self._on_profile_updated,
             WikiPageChanged: self._on_wiki_changed,
@@ -1398,6 +1420,174 @@ class HudReducer:
                 status=_safe(event.kind, LABEL_CHARS) or "modified",
                 subject=_safe(event.slug, LABEL_CHARS),
                 at_ns=ts,
+            )
+        )
+
+    @staticmethod
+    def _memory_promotion_id(candidate_id: int, digest: str) -> str:
+        return f"memory_promotion:{candidate_id}:{digest}"
+
+    def _on_temporary_memory_stored(self, event: TemporaryMemoryStored) -> bool:
+        return self._remember(
+            HudMemoryActivity(
+                activity_id=f"temporary:{event.item_id}",
+                kind="temporary_memory",
+                status="stored",
+                subject=_safe(event.kind, LABEL_CHARS),
+                project_id=_opt(event.project_id),
+                at_ns=_ts(event),
+            )
+        )
+
+    def _on_memory_pre_expiry_review(
+        self, event: MemoryPreExpiryReviewRequired
+    ) -> bool:
+        return self._remember(
+            HudMemoryActivity(
+                activity_id=f"temporary-review:{event.item_id}",
+                kind="pre_expiry_review",
+                status="required",
+                subject=_safe(event.kind, LABEL_CHARS),
+                project_id=_opt(event.project_id),
+                at_ns=_ts(event),
+            )
+        )
+
+    def _on_temporary_memory_expired(self, event: TemporaryMemoryExpired) -> bool:
+        return self._remember(
+            HudMemoryActivity(
+                activity_id=f"temporary:{event.item_id}",
+                kind="temporary_memory",
+                status="expired",
+                subject=_safe(event.kind, LABEL_CHARS),
+                project_id=_opt(event.project_id),
+                at_ns=_ts(event),
+            )
+        )
+
+    def _on_memory_candidate_created(self, event: MemoryCandidateCreated) -> bool:
+        candidate_id = _positive_int(event.candidate_id)
+        return self._remember(
+            HudMemoryActivity(
+                activity_id=f"candidate:{candidate_id or 0}",
+                kind="memory_candidate",
+                status=_safe(event.basis, LABEL_CHARS) or "created",
+                subject=_safe(event.kind, LABEL_CHARS),
+                candidate_id=candidate_id,
+                at_ns=_ts(event),
+            )
+        )
+
+    def _on_memory_promotion_proposed(self, event: MemoryPromotionProposed) -> bool:
+        ts = _ts(event)
+        candidate_id = _positive_int(event.candidate_id)
+        digest = str(event.proposal_digest or "").strip()
+        activity_changed = self._remember(
+            HudMemoryActivity(
+                activity_id=f"promotion:{candidate_id or 0}:{digest[:12]}",
+                kind="promotion_proposed",
+                status="waiting",
+                subject=_safe(event.governance_class, LABEL_CHARS),
+                candidate_id=candidate_id,
+                at_ns=ts,
+            )
+        )
+        if candidate_id is None or not digest:
+            return activity_changed
+        approval_id = self._memory_promotion_id(candidate_id, digest)
+        orphan_ts = self._approval_orphans.get(approval_id)
+        if orphan_ts is not None and orphan_ts >= ts:
+            self._approval_orphans.pop(approval_id, None)
+            return activity_changed
+        expires_ms = max(0, int(event.expires_ms or 0))
+        card_changed = self._open_approval(
+            HudApproval(
+                approval_id=approval_id,
+                kind="memory_promotion",
+                action="Persistent memory promotion",
+                decision_channel="none",
+                reason=_safe(event.governance_class, LABEL_CHARS),
+                candidate_id=candidate_id,
+                proposal_digest=digest,
+                requested_at_ns=ts,
+                expires_at_ns=expires_ms * 1_000_000,
+                read_only_reason=_READ_ONLY_NO_ROUTE,
+            ),
+            ts,
+        )
+        return activity_changed or card_changed
+
+    def _on_memory_promotion_decision(
+        self, event: MemoryPromotionApproved | MemoryPromotionRejected
+    ) -> bool:
+        ts = _ts(event)
+        candidate_id = _positive_int(event.candidate_id)
+        digest = str(event.proposal_digest or "").strip()
+        approved = isinstance(event, MemoryPromotionApproved)
+        activity_changed = self._remember(
+            HudMemoryActivity(
+                activity_id=f"promotion:{candidate_id or 0}:{digest[:12]}",
+                kind="promotion_approved" if approved else "promotion_rejected",
+                status="approved" if approved else "rejected",
+                subject=(
+                    ""
+                    if approved
+                    else _safe(getattr(event, "reason", ""), LABEL_CHARS)
+                ),
+                candidate_id=candidate_id,
+                at_ns=ts,
+            )
+        )
+        if candidate_id is None or not digest:
+            return activity_changed
+        approval_id = self._memory_promotion_id(candidate_id, digest)
+        card_changed = self._approvals.pop(approval_id, None) is not None
+        if not card_changed:
+            self._orphan_approval(approval_id, ts)
+        return activity_changed or card_changed
+
+    def _on_persistent_memory_changed(self, event: PersistentMemoryChanged) -> bool:
+        candidate_id = _positive_int(event.candidate_id)
+        return self._remember(
+            HudMemoryActivity(
+                activity_id=f"persistent:{candidate_id or 0}",
+                kind="persistent_memory",
+                status=_safe(event.change_kind, LABEL_CHARS) or "changed",
+                subject=_safe(event.target_ref, LABEL_CHARS),
+                candidate_id=candidate_id,
+                at_ns=_ts(event),
+            )
+        )
+
+    def _on_memory_conflict_detected(self, event: MemoryConflictDetected) -> bool:
+        candidate_id = _positive_int(event.candidate_id)
+        return self._remember(
+            HudMemoryActivity(
+                activity_id=f"memory-conflict:{candidate_id or 0}",
+                kind="memory_conflict",
+                status="detected",
+                subject=_safe(event.conflict_ref, LABEL_CHARS),
+                candidate_id=candidate_id,
+                at_ns=_ts(event),
+            )
+        )
+
+    def _on_memory_deleted(self, event: MemoryDeleted) -> bool:
+        subject = ":".join(
+            part
+            for part in (
+                _safe(event.memory_kind, 40),
+                _safe(event.memory_id, 40),
+            )
+            if part
+        )
+        return self._remember(
+            HudMemoryActivity(
+                activity_id=f"memory-delete:{_trace(event)}",
+                kind="memory_deleted",
+                status=_safe(event.reason, LABEL_CHARS) or "deleted",
+                subject=subject,
+                at_ns=_ts(event),
             )
         )
 
