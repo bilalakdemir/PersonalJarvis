@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WSAudioLevel, WSCommand, WSWelcome } from "./ws";
+import { WSAudioLevel, WSCommand, WSHudSnapshot, WSOutbound, WSWelcome } from "./ws";
 
 describe("WSCommand mission.inject", () => {
   it("validates a mission.inject command", () => {
@@ -36,5 +36,17 @@ describe("WSAudioLevel", () => {
     expect(WSAudioLevel.safeParse({ type: "audio.level", input: 1.2 }).success).toBe(
       false,
     );
+  });
+});
+
+describe("WSHudSnapshot", () => {
+  it("is part of the outbound union and keeps the snapshot body", () => {
+    const frame = { type: "hud.snapshot", snapshot: { primary_state: "IDLE", revision: 3 } };
+    expect(WSHudSnapshot.parse(frame).snapshot.revision).toBe(3);
+    expect(WSOutbound.parse(frame).type).toBe("hud.snapshot");
+  });
+
+  it("rejects a frame without a snapshot object", () => {
+    expect(WSHudSnapshot.safeParse({ type: "hud.snapshot" }).success).toBe(false);
   });
 });
