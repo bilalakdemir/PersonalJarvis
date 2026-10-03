@@ -65,8 +65,8 @@ ERROR_SCOPES: Final[tuple[str, ...]] = ("global", "operation", "agent", "project
 ApprovalDecisionChannel = Literal["mission_tool_api", "chat_card", "none"]
 DECISION_CHANNELS: Final[tuple[str, ...]] = ("mission_tool_api", "chat_card", "none")
 
-ApprovalKind = Literal["tool_call", "project_state"]
-APPROVAL_KINDS: Final[tuple[str, ...]] = ("tool_call", "project_state")
+ApprovalKind = Literal["tool_call", "project_state", "memory_promotion"]
+APPROVAL_KINDS: Final[tuple[str, ...]] = ("tool_call", "project_state", "memory_promotion")
 
 
 @dataclass(frozen=True, slots=True)
