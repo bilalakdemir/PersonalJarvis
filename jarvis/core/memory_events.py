@@ -15,6 +15,14 @@ class TemporaryMemoryStored(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryPreExpiryReviewRequired(Event):
+    item_id: int = 0
+    kind: str = ""
+    project_id: str | None = None
+    expires_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class TemporaryMemoryExpired(Event):
     item_id: int = 0
     kind: str = ""
