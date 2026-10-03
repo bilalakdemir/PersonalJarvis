@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 import pytest
 
-from jarvis.memory.retention import MemoryRetentionPolicy, MemoryRetentionSweeper
+from jarvis.core.bus import EventBus
+from jarvis.memory.recall import RecallStore
+from jarvis.memory.retention import (
+    MemoryRetentionPolicy,
+    MemoryRetentionSweeper,
+    bootstrap_memory_retention,
+)
 
 
 @dataclass
@@ -12,6 +19,7 @@ class _TempItem:
     id: int
     kind: str = "research"
     project_id: str | None = None
+    expires_ms: int = 0
 
 
 class _Recall:
@@ -30,7 +38,7 @@ class _Temporary:
     async def due_for_review(self, *, within_hours: int, limit: int):
         assert within_hours == 24
         assert limit == 500
-        return [_TempItem(7)]
+        return [_TempItem(7, expires_ms=123)]
 
     async def expired(self, *, limit: int):
         assert limit == 1000
@@ -117,3 +125,25 @@ async def test_retention_sweep_reviews_then_expires_all_temporary_layers() -> No
 def test_retention_policy_rejects_nonpositive_values() -> None:
     with pytest.raises(ValueError, match="positive"):
         MemoryRetentionPolicy(candidate_retention_days=0)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_memory_retention_starts_and_closes_runtime(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "jarvis.db"
+    recall = RecallStore(db_path)
+    await recall.open()
+    runtime = await bootstrap_memory_retention(
+        db_path=db_path,
+        event_publisher=EventBus(),
+        recall=recall,
+        interval_s=3600,
+    )
+    try:
+        # Let the background task enter its first bounded sweep. It should not
+        # block bootstrap or require Wiki integration to exist.
+        await asyncio.sleep(0.05)
+    finally:
+        await runtime.close()
+        await recall.close()
