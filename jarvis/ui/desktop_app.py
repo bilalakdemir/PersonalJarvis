@@ -3904,7 +3904,21 @@ class DesktopApp:
                 hide_on_idle = (
                     (not self.cfg.ui.bar_persistent) if orb_style == "jarvis_bar" else True
                 )
-                bridge = OrbBusBridge(bus=bus, orb=surface, hide_on_idle=hide_on_idle)
+                # N-16: the surface presents the ONE canonical HUD state for
+                # this bus (shared with the web workspace). Optional — an HUD
+                # failure must never cost the user the overlay.
+                hud = None
+                try:
+                    from jarvis.ui.hud import hud_adapter_for
+
+                    hud = hud_adapter_for(bus)
+                except Exception as hud_exc:  # noqa: BLE001
+                    logger.opt(exception=hud_exc).warning(
+                        "HUD adapter unavailable; overlay runs without background state"
+                    )
+                bridge = OrbBusBridge(
+                    bus=bus, orb=surface, hide_on_idle=hide_on_idle, hud=hud
+                )
                 bridge.attach()
                 self._orb = surface
                 self._bridge = bridge
