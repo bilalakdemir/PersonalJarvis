@@ -117,6 +117,38 @@ class ProjectStateProposalStore:
         assert self._conn is not None
         return self._conn
 
+    async def expire_due(self, *, limit: int = 500) -> tuple[int, ...]:
+        """Expire approval-pending project proposals and their queue items."""
+
+        conn = await self._ensure_open()
+        now_ms = int(self._clock() * 1000)
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await conn.execute(
+                """
+                SELECT queue_item_id
+                FROM memory_project_state_proposals
+                WHERE status IN ('awaiting-approval', 'approved')
+                  AND expires_ms <= ?
+                ORDER BY expires_ms, id
+                LIMIT ?
+                """,
+                (now_ms, max(1, int(limit))),
+            )
+            rows = await cur.fetchall()
+            await cur.close()
+            ids = tuple(int(row["queue_item_id"]) for row in rows)
+            for queue_item_id in ids:
+                row = await _fetch_proposal_row(conn, queue_item_id)
+                if row is None:
+                    continue
+                await _expire_locked(conn, _row_to_stored(row), now_ms)
+            await conn.execute("COMMIT")
+            return ids
+        except Exception:
+            await conn.execute("ROLLBACK")
+            raise
+
     async def persist(
         self,
         *,

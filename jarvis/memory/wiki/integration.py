@@ -139,6 +139,7 @@ class WikiIntegrationHandle:
     _promotion_queue_cleanup: Callable[[], Awaitable[None]] | None = field(
         default=None
     )
+    _persistent_approval_queue: Any = field(default=None)
     # Contact → person-page mirror: detach callback (notify sink + bus
     # subscription) and the boot reconciliation task.
     _contact_mirror_cleanup: Callable[[], None] | None = field(default=None)
@@ -251,6 +252,16 @@ class WikiIntegrationHandle:
                 )
             self._promotion_queue_cleanup = None
             self._promotion_queue = None
+
+        if self._persistent_approval_queue is not None:
+            try:
+                await self._persistent_approval_queue.close()
+            except Exception:  # noqa: BLE001
+                log.debug(
+                    "wiki_integration: persistent approval queue cleanup failed",
+                    exc_info=True,
+                )
+            self._persistent_approval_queue = None
 
         # Close Stage 1 only after every producer and Stage-2 drain is stopped.
         if self._journal is not None:
@@ -544,6 +555,7 @@ async def bootstrap_wiki_integration(
     # any backlog. If this fails, project candidates remain pending rather
     # than publishing a route event that nobody can durably record.
     promotion_queue = None
+    persistent_approval_queue = None
     if journal is not None and scheduler is not None and db_path is not None:
         try:
             from jarvis.memory.promotion_queue import (
@@ -567,6 +579,30 @@ async def bootstrap_wiki_integration(
             log.warning(
                 "wiki_integration: memory promotion queue unavailable "
                 "(%s) — project candidates remain pending",
+                exc,
+            )
+
+        try:
+            from jarvis.memory.persistent_approval import (
+                PersistentMemoryApprovalQueue,
+            )
+
+            persistent_approval_queue = PersistentMemoryApprovalQueue(
+                db_path,
+                bus=bus,
+            )
+            await persistent_approval_queue.open()
+            handle._persistent_approval_queue = (  # noqa: SLF001
+                persistent_approval_queue
+            )
+            log.info(
+                "wiki_integration: persistent-memory approval queue attached"
+            )
+        except Exception as exc:  # noqa: BLE001
+            persistent_approval_queue = None
+            log.warning(
+                "wiki_integration: persistent-memory approval queue unavailable "
+                "(%s) — governed candidates remain pending",
                 exc,
             )
 
@@ -606,11 +642,8 @@ async def bootstrap_wiki_integration(
                     if promotion_queue is not None
                     else None
                 ),
-                event_publisher=(
-                    bus
-                    if promotion_queue is not None
-                    else None
-                ),
+                persistent_approval_queue=persistent_approval_queue,
+                event_publisher=bus,
             )
             scheduler.attach_consolidator(consolidator)
             capture_ready = True

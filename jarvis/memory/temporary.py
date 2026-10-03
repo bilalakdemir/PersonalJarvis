@@ -202,6 +202,27 @@ class TemporaryMemoryStore:
         await cur.close()
         return changed
 
+    async def expired(
+        self,
+        *,
+        limit: int = 500,
+    ) -> list[TemporaryMemoryItem]:
+        """Return retention-expired items so lifecycle events can name them."""
+
+        conn = await self._ensure_open()
+        cur = await conn.execute(
+            """
+            SELECT * FROM temporary_memory
+            WHERE expires_ms <= ?
+            ORDER BY expires_ms ASC, id ASC
+            LIMIT ?
+            """,
+            (int(self._clock() * 1000), max(1, int(limit))),
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+        return [_row_to_item(row) for row in rows]
+
     async def delete_expired(self) -> int:
         conn = await self._ensure_open()
         cur = await conn.execute(

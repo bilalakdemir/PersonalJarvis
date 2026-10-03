@@ -166,6 +166,9 @@ class WebServer:
         self._task_cancel_token: Any | None = None
         # Phase B5 wiki write-wiring handle — shutdown() called in stop().
         self._wiki_integration_handle: Any | None = None
+        # Governed-memory retention runtime — owns its periodic sweep and
+        # dedicated SQLite handles; closed before Wiki teardown in stop().
+        self._memory_retention_runtime: Any | None = None
         # Periodic evidence-safe realtime wiki backfill — cancelled in stop().
         self._wiki_backfill_task: asyncio.Task[None] | None = None
         # Phase B3 wiki live-reload watchdog handle — shutdown() called in stop().
@@ -2676,6 +2679,17 @@ class WebServer:
                 logger.debug("wiki health.record_bootstrap(False) failed", exc_info=True)
         _boot_mark("wiki_integration")
 
+        # Governed-memory retention is independent of the Wiki feature flag.
+        # It reuses the live RecallStore when available, opens bounded
+        # lifecycle handles on the same jarvis.db, and runs off the boot path.
+        try:
+            await self._init_memory_retention()
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=exc).warning(
+                "Memory retention init failed — governed expiry will retry on next boot"
+            )
+        _boot_mark("memory_retention")
+
         # Jarvis' own self-learning loop: two bus subscriptions, nothing else
         # at boot. Reviews run later in the background (jarvis/memory/learning).
         try:
@@ -3241,6 +3255,35 @@ class WebServer:
             _wiki_health.record_bootstrap(True)
         except Exception:  # noqa: BLE001 — health recording must never break boot
             logger.debug("wiki health.record_bootstrap(True) failed", exc_info=True)
+
+    async def _init_memory_retention(self) -> None:
+        """Start bounded governed-memory retention on the shared Jarvis DB."""
+
+        from jarvis.memory.retention import bootstrap_memory_retention
+
+        db_path = Path(self.cfg.memory.data_dir) / "jarvis.db"
+        brain = getattr(self.app.state, "brain", None)
+        recall = getattr(brain, "_recall", None)
+
+        async def _final_candidate_review() -> None:
+            # Reuse the existing Stage-2 governance/write pipeline when Wiki is
+            # live. No second writer and no automatic persistence decision.
+            from jarvis.memory.wiki.integration import get_running_capture_runtime
+            from jarvis.memory.wiki.scheduler import TriggerSource
+
+            capture = get_running_capture_runtime()
+            if capture is None or capture.scheduler is None:
+                return
+            await capture.scheduler.trigger(TriggerSource.JOURNAL)
+
+        runtime = await bootstrap_memory_retention(
+            db_path=db_path,
+            event_publisher=self.bus,
+            recall=recall,
+            final_review=_final_candidate_review,
+        )
+        self._memory_retention_runtime = runtime
+        logger.info("Governed memory retention online (db={})", db_path)
 
     async def _wiki_auto_backfill_loop(
         self,
@@ -3981,6 +4024,18 @@ class WebServer:
         if backfill_task is not None:
             backfill_task.cancel()
             self._wiki_backfill_task = None
+
+        # Stop governed-memory retention before Wiki teardown: its final-review
+        # callback may reference the live Stage-2 scheduler.
+        memory_retention = getattr(self, "_memory_retention_runtime", None)
+        if memory_retention is not None:
+            try:
+                await memory_retention.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.opt(exception=exc).debug(
+                    "MemoryRetentionRuntime.close() failed"
+                )
+            self._memory_retention_runtime = None
 
         # Phase B5 wiki write-wiring: unsubscribe + drain in-flight rollup task.
         wiki_handle = getattr(self, "_wiki_integration_handle", None)
