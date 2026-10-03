@@ -169,7 +169,8 @@
     "voice": "{name} Stimme",
     "voice_shortcuts": "Tastenkürzel",
     "voice_language": "Sprache",
-    "voice_api_keys": "API-Keys"
+    "voice_api_keys": "API-Keys",
+    "hud": "HUD"
   },
   "agent_instructions": {
     "subtitle": "Deine persönlichen Präferenzen, wie der Assistent mit dir arbeitet — Ton, Sprache, Voreinstellungen, dauerhafte Fakten. Getrennt vom System-Prompt und hebelt niemals Sicherheit oder Bestätigungen aus.",
@@ -6023,5 +6024,95 @@
     "save_error": "Speichern fehlgeschlagen: {0}",
     "toast_refused": "Kein Appshot: {0}",
     "chip_label": "Appshot an deine Nachricht gehängt"
+  },
+  "hud": {
+    "title": "HUD",
+    "loading": "HUD wird geladen…",
+    "quiet": "Nichts läuft und nichts wartet auf dich.",
+    "state": {
+      "idle": "Bereit",
+      "listening": "Hört zu",
+      "thinking": "Denkt nach",
+      "working": "Arbeitet",
+      "waiting_for_approval": "Wartet auf deine Freigabe",
+      "speaking": "Spricht",
+      "error": "Fehler"
+    },
+    "connection": {
+      "connected": "Verbunden",
+      "reconnecting": "Verbindet neu…",
+      "disconnected": "Getrennt"
+    },
+    "attention": {
+      "approval": "Freigabe offen",
+      "working": "Hintergrundarbeit",
+      "error": "Fehler gemeldet"
+    },
+    "panel": {
+      "approvals": "Freigaben",
+      "project": "Aktives Projekt",
+      "activity": "Missionen & Agenten",
+      "computer": "Computersteuerung",
+      "memory": "Gedächtnis-Aktivität",
+      "error": "Letzter Fehler",
+      "conversation": "Unterhaltung"
+    },
+    "approval": {
+      "target": "Ziel",
+      "project": "Projekt",
+      "reason": "Grund",
+      "risk": "Risiko",
+      "expires": "Läuft ab in",
+      "identity": "Anfrage",
+      "approve": "Freigeben",
+      "deny": "Ablehnen",
+      "read_only": {
+        "no_out_of_band_route": "Diese Anfrage kann nur dort beantwortet werden, wo sie gestellt wurde.",
+        "answered_in_chat": "Beantworte diese Anfrage in ihrem Chat.",
+        "project_state_route_unavailable": "Änderungen am Projektstatus können im HUD noch nicht freigegeben werden."
+      }
+    },
+    "project": {
+      "current": "AKTUELL",
+      "no_current": "Keine aktuelle Aufgabe",
+      "revision": "Revision",
+      "invalid": "Projektstatus braucht Aufmerksamkeit:"
+    },
+    "activity": {
+      "agents": "Missionen und Agenten",
+      "operations": "Vorgänge"
+    },
+    "status": {
+      "running": "läuft",
+      "completed": "fertig",
+      "failed": "fehlgeschlagen",
+      "cancelled": "abgebrochen"
+    },
+    "computer": {
+      "control": "Steuerung",
+      "in_control": "{name} steuert diesen Computer",
+      "released": "Freigegeben",
+      "phase": "Phase",
+      "action": "Letzte Aktion",
+      "capture": "Bildschirmaufnahme"
+    },
+    "memory": {
+      "memory_updated": "Gedächtnis aktualisiert",
+      "profile_updated": "Profil aktualisiert",
+      "wiki_page": "Wiki-Seite"
+    },
+    "error_scope": {
+      "global": "{name}",
+      "operation": "Vorgang",
+      "agent": "Agent",
+      "project": "Projekt",
+      "component": "Komponente"
+    },
+    "conversation": {
+      "empty": "Noch keine Unterhaltung.",
+      "open": "Chat öffnen",
+      "user": "Du",
+      "assistant": "{name}"
+    }
   }
 }
