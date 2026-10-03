@@ -2008,6 +2008,54 @@ body {
     }
   }
 
+  /* HUD reactor (N-17). Client-side motion only — the backend sends semantic
+     state, never frames. Every state is ALSO told apart without motion (label,
+     tone token, ring pattern), so reduced motion just stops the rings. */
+  .hud-reactor svg {
+    overflow: visible;
+  }
+  .hud-reactor-outer,
+  .hud-reactor-mid {
+    transform-origin: 100px 100px;
+    transform-box: view-box;
+  }
+  @keyframes hud-reactor-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes hud-reactor-pulse {
+    0%,
+    100% {
+      opacity: 0.75;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+  .hud-reactor:not([data-state="IDLE"]):not([data-state="ERROR"]) .hud-reactor-outer {
+    animation: hud-reactor-spin 24s linear infinite;
+  }
+  .hud-reactor[data-state="THINKING"] .hud-reactor-mid,
+  .hud-reactor[data-state="WORKING"] .hud-reactor-mid {
+    animation: hud-reactor-spin 6s linear infinite reverse;
+  }
+  .hud-reactor[data-state="LISTENING"] .hud-reactor-core,
+  .hud-reactor[data-state="SPEAKING"] .hud-reactor-core,
+  .hud-reactor[data-state="WAITING_FOR_APPROVAL"] .hud-reactor-core {
+    animation: hud-reactor-pulse 1.8s ease-in-out infinite;
+  }
+  .hud-reactor .hud-reactor-core {
+    filter: drop-shadow(0 0 6px currentColor);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hud-reactor .hud-reactor-outer,
+    .hud-reactor .hud-reactor-mid,
+    .hud-reactor .hud-reactor-core {
+      animation: none !important;
+    }
+  }
+
   /* Soft float animation for the hero orb */
   @keyframes jarvis-float {
     0%,
