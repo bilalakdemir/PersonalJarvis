@@ -40,6 +40,9 @@ def test_the_vocabulary_has_exactly_one_definition() -> None:
     assert subprocess_mod._MODES is modes.MODES
     assert interaction.DICTATION_MODES is modes.DICTATION_MODES
     assert interaction.NOTICE_MODES is modes.NOTICE_MODES
+    assert renderer.ATTENTION_MODES is modes.ATTENTION_MODES
+    assert renderer.WORK_MODES is modes.WORK_MODES
+    assert renderer.HUD_MODES is modes.HUD_MODES
 
 
 def test_no_module_hardcodes_a_mode_tuple() -> None:
@@ -148,7 +151,7 @@ def test_the_null_surface_swallows_every_mode(mode: str) -> None:
 #: Every look ``renderer.render`` knows how to draw. Derived from the mode
 #: vocabulary so a new mode either resolves to an existing look or brings its
 #: own — it can never resolve to a look nothing draws.
-_RENDERABLE_LOOKS = ("idle", "speak", "think") + modes.NOTICE_MODES
+_RENDERABLE_LOOKS = ("idle", "speak", "think") + modes.NOTICE_MODES + modes.HUD_MODES
 
 
 @pytest.mark.parametrize("mode", modes.MODES)
