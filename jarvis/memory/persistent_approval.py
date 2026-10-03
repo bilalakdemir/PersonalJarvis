@@ -125,7 +125,7 @@ class PersistentMemoryApprovalQueue:
         expires_ms = now_ms + days * _MS_PER_DAY
         conn = await self._ensure_open()
 
-        await conn.execute(
+        cur = await conn.execute(
             """
             INSERT INTO memory_persistent_approvals (
                 candidate_id, content_sha256, governance_class,
@@ -144,6 +144,8 @@ class PersistentMemoryApprovalQueue:
                 expires_ms,
             ),
         )
+        inserted = cur.rowcount == 1
+        await cur.close()
         item = await self.get(candidate)
         if item is None:
             raise PersistentMemoryApprovalError(
@@ -157,7 +159,7 @@ class PersistentMemoryApprovalQueue:
             raise PersistentMemoryApprovalIdentityError(
                 "candidate is already bound to different persistent-memory content"
             )
-        if item.status == "pending":
+        if inserted and item.status == "pending":
             await self._publish(
                 MemoryPromotionProposed(
                     source_layer="memory",
@@ -354,6 +356,17 @@ class PersistentMemoryApprovalQueue:
                 f"WHERE candidate_id IN ({placeholders}) AND status = 'pending'",  # noqa: S608
                 (now_ms, *ids),
             )
+            for candidate_id in ids:
+                item = await self.get(candidate_id)
+                if item is not None:
+                    await self._publish(
+                        MemoryPromotionRejected(
+                            source_layer="memory",
+                            candidate_id=item.candidate_id,
+                            proposal_digest=item.proposal_digest,
+                            reason="retention-expired",
+                        )
+                    )
         return ids
 
     async def _get_locked(
