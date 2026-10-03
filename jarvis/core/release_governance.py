@@ -14,6 +14,7 @@ and preserves the evidence required to make or audit the decision.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -22,6 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from jarvis.core.paths import user_data_dir
+
+log = logging.getLogger(__name__)
 
 STATE_SCHEMA = 1
 DEFAULT_VALIDATION_DAYS = 7
@@ -328,8 +331,12 @@ class ReleaseGovernanceStore:
         except OSError as exc:
             try:
                 temp.unlink(missing_ok=True)
-            except OSError:
-                pass
+            except OSError as cleanup_exc:
+                log.debug(
+                    "release governance: could not remove failed temp state %s: %s",
+                    temp,
+                    cleanup_exc,
+                )
             raise ReleaseGovernanceError("could not persist release-governance state") from exc
 
     def add_candidate(self, manifest: JarvisReleaseManifest) -> ReleaseGovernanceState:
