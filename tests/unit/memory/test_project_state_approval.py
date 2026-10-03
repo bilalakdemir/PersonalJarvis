@@ -423,3 +423,72 @@ async def test_committed_manifest_recovers_after_crash_before_queue_finalize(
         await lifecycle.close()
         await queue.close()
         journal.close()
+
+
+@pytest.mark.asyncio
+async def test_tampered_durable_proposal_payload_fails_closed(
+    tmp_path: Path,
+) -> None:
+    root, journal, queue, item, lifecycle, _ = await _setup(tmp_path)
+    before = (root / "STATE.md").read_bytes()
+
+    try:
+        await lifecycle.prepare(item.id)
+        conn = await lifecycle._proposals._ensure_open()
+        cur = await conn.execute(
+            "SELECT proposal_json FROM memory_project_state_proposals "
+            "WHERE queue_item_id = ?",
+            (item.id,),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        assert row is not None
+        payload = json.loads(str(row["proposal_json"]))
+        payload["reason"] = "tampered after persistence"
+        await conn.execute(
+            "UPDATE memory_project_state_proposals SET proposal_json = ? "
+            "WHERE queue_item_id = ?",
+            (
+                json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                item.id,
+            ),
+        )
+
+        with pytest.raises(ProjectStateProposalIdentityError, match="digest"):
+            await lifecycle._proposals.get(item.id)
+        assert (root / "STATE.md").read_bytes() == before
+    finally:
+        await lifecycle.close()
+        await queue.close()
+        journal.close()
+
+
+@pytest.mark.asyncio
+async def test_project_state_proposal_expiry_closes_queue_consistently(
+    tmp_path: Path,
+) -> None:
+    _root, journal, queue, item, lifecycle, _ = await _setup(tmp_path)
+
+    try:
+        await lifecycle.prepare(item.id)
+        conn = await lifecycle._proposals._ensure_open()
+        await conn.execute(
+            "UPDATE memory_project_state_proposals SET expires_ms = 0 "
+            "WHERE queue_item_id = ?",
+            (item.id,),
+        )
+
+        expired = await lifecycle._proposals.expire_due()
+        assert expired == (item.id,)
+
+        queued = await queue.get(item.id)
+        assert queued is not None
+        assert queued.status == "expired"
+
+        stored = await lifecycle._proposals.get(item.id)
+        assert stored is not None
+        assert stored.status == "expired"
+    finally:
+        await lifecycle.close()
+        await queue.close()
+        journal.close()

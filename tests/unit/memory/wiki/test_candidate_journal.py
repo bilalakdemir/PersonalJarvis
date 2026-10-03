@@ -136,7 +136,7 @@ def test_migration_0008_adds_grounding_excerpt_store_to_existing_database(
         )
         conn.execute("PRAGMA user_version = 7")
 
-        assert run_migrations_sync(conn) == 12
+        assert run_migrations_sync(conn) == 13
 
         columns = {
             row[1]
@@ -157,7 +157,7 @@ def test_migration_0009_adds_basis_store_to_existing_database(
     try:
         conn.execute("PRAGMA user_version = 8")
 
-        assert run_migrations_sync(conn) == 12
+        assert run_migrations_sync(conn) == 13
 
         columns = {
             row[1]
@@ -206,8 +206,8 @@ def test_standalone_journal_then_numbered_migrations_is_idempotent(
         )
         conn.executescript(schema.read_text(encoding="utf-8"))
 
-        assert run_migrations_sync(conn) == 12
-        assert run_migrations_sync(conn) == 12
+        assert run_migrations_sync(conn) == 13
+        assert run_migrations_sync(conn) == 13
     finally:
         conn.close()
 
@@ -269,7 +269,7 @@ def test_development_column_excerpt_is_copied_without_migration_collision(
             / "schema.sql"
         )
         conn.executescript(schema.read_text(encoding="utf-8"))
-        assert run_migrations_sync(conn) == 12
+        assert run_migrations_sync(conn) == 13
     finally:
         conn.close()
 

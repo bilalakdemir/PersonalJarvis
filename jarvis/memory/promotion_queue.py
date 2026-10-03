@@ -227,6 +227,35 @@ class MemoryPromotionQueue:
         await cur.close()
         return [_row_to_item(row) for row in rows]
 
+    async def expire_due(self, *, limit: int = 500) -> tuple[int, ...]:
+        """Close unclaimed expired queue items without touching canonical state."""
+
+        conn = await self._ensure_open()
+        now_ms = int(self._clock() * 1000)
+        cur = await conn.execute(
+            """
+            SELECT id
+            FROM memory_promotion_queue
+            WHERE status = 'pending' AND expires_ms <= ?
+            ORDER BY expires_ms, id
+            LIMIT ?
+            """,
+            (now_ms, max(1, int(limit))),
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+        ids = tuple(int(row["id"]) for row in rows)
+        if not ids:
+            return ()
+        placeholders = ",".join("?" for _ in ids)
+        await conn.execute(
+            "UPDATE memory_promotion_queue "
+            "SET status = 'expired', updated_ms = ? "
+            f"WHERE id IN ({placeholders}) AND status = 'pending'",  # noqa: S608
+            (now_ms, *ids),
+        )
+        return ids
+
 
 async def attach_project_state_route_queue(
     *,
