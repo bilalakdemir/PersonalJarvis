@@ -38,7 +38,7 @@ export type HudErrorScope = (typeof HUD_ERROR_SCOPES)[number];
 export const HUD_DECISION_CHANNELS = ["mission_tool_api", "chat_card", "none"] as const;
 export type HudDecisionChannel = (typeof HUD_DECISION_CHANNELS)[number];
 
-export const HUD_APPROVAL_KINDS = ["tool_call", "project_state"] as const;
+export const HUD_APPROVAL_KINDS = ["tool_call", "project_state", "memory_promotion"] as const;
 export type HudApprovalKind = (typeof HUD_APPROVAL_KINDS)[number];
 
 export interface HudProject {
