@@ -364,6 +364,13 @@ def mode_energy(mode: str, t: float, ext_level: float | None) -> float:
       stale level outright and runs a steady work pulse instead — the mascot's
       equivalent of the bar's orbital core.
 
+    ``work`` — the HUD projection's background work while no conversation is
+    live: a slow steady pulse, level-deaf.
+
+    ``attention`` — the HUD projection's "something is waiting on you" (a
+    pending approval while no conversation is live). A steady, level-deaf
+    breath between the notice and the dictation floor.
+
     ``notice`` — something the user asked for did not happen. Like
     ``dictate_transcribing`` it IGNORES the live level: the mascot must not
     shimmer along with a microphone it is not using while it says the opposite.
@@ -374,6 +381,15 @@ def mode_energy(mode: str, t: float, ext_level: float | None) -> float:
     """
     if mode == "notice":
         return max(0.0, min(1.0, 0.16 + 0.08 * math.sin(t * 1.1)))
+    if mode == "work":
+        # HUD background work: a slow, steady pulse — the mascot's version of
+        # the bar's narrow sweep. Level-deaf: no session is listening.
+        return max(0.0, min(1.0, 0.20 + 0.06 * math.sin(t * 1.6)))
+    if mode == "attention":
+        # HUD background attention (a pending approval): awake and waiting,
+        # brighter and steadier than a notice, and — like the notice — deaf to
+        # the live level, because no session is listening.
+        return max(0.0, min(1.0, 0.24 + 0.10 * math.sin(t * 2.2)))
     if mode == "dictate":
         live = 0.0 if ext_level is None else max(0.0, min(1.0, ext_level))
         floor = 0.22 + 0.14 * math.sin(t * 1.6)

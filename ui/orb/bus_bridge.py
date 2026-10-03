@@ -18,6 +18,17 @@ Animation mapping (phase 1c-add 2026-04-24):
 Architecture rule: the UI layer (L7) subscribes, the business layer (L2
 speech, L6 supervisor) publishes. The bridge lives in the UI layer.
 
+HUD projection (N-16): the bridge holds NO operational state machine of its
+own. What Jarvis is doing in the background — work in flight, an approval
+waiting, a global error — comes from the ONE canonical
+``jarvis.ui.hud.HudStateAdapter`` (injected as ``hud``) through the pure
+mapping in ``ui.orb.hud_projection``. ``_last_state`` and the session/dictation
+latches below are presentational mirrors used for choreography (animations,
+bubble, mic routing, visibility, resurrection guard), not a second authority:
+whenever the voice lane is at rest, a persistent bar shows
+``hud_projection.rest_mode(snapshot)`` instead of a hard-coded idle pill.
+Without a ``hud`` the bridge behaves exactly as before (rest = ``idle``).
+
 Threading:
     subscribe() handlers are called from the asyncio event loop; they call
     the orb API (show/hide/set_mode), which internally queues the UI
@@ -62,9 +73,12 @@ from jarvis.core.events import (
 )
 from jarvis.dictation.outcomes import was_delivered
 from ui.orb.animations import IDLE_ANIMATION_POOL
+from ui.orb.hud_projection import ERROR_NOTICE_DWELL_S, is_new_global_error, rest_mode
 
 if TYPE_CHECKING:
     from jarvis.core.bus import EventBus
+    from jarvis.ui.hud.adapter import HudStateAdapter
+    from jarvis.ui.hud.models import HudSnapshot
     from ui.orb.overlay import OrbOverlay
 
 
@@ -223,9 +237,20 @@ class OrbBusBridge:
         orb: OrbOverlay,
         idle_animations_enabled: bool = True,
         hide_on_idle: bool = True,
+        hud: HudStateAdapter | None = None,
     ) -> None:
         self._bus = bus
         self._orb = orb
+        # Canonical HUD semantics (N-16). Optional so every existing surface
+        # and test double keeps working unchanged; when present it is the ONLY
+        # source of background state the surface shows at rest.
+        self._hud = hud
+        self._hud_unsubscribe: Any | None = None
+        self._hud_snapshot: HudSnapshot | None = None
+        # The rest mode last painted for the HUD (None = not painted yet on
+        # this surface), so a snapshot that changes nothing the bar can show
+        # costs no repaint.
+        self._hud_rest_mode: str | None = None
         self._mic_level_unsub = None  # mic_level subscription (registered in attach)
         self._tts_recency_unsub = None  # level_tap subscription (TTS-active tracker)
         # Monotonic time of the last TTS output level. The state label
@@ -463,6 +488,7 @@ class OrbBusBridge:
                 "+ mute-toggle gesture + show-window gesture "
                 "+ visible-feedback contract."
             )
+            self._attach_hud()
         except Exception as exc:  # noqa: BLE001
             log.exception("OrbBridge.attach() failed: %s", exc)
 
@@ -640,7 +666,7 @@ class OrbBusBridge:
         if self._hide_on_idle:
             self._orb.hide()
         else:
-            self._orb.show(mode="idle")
+            self._show_rest_mode()
 
     async def _on_wake_word_detected(self, event: WakeWordDetected) -> None:
         """Pop the orb on the earliest confirmed wake signal."""
@@ -757,7 +783,7 @@ class OrbBusBridge:
         # repaint. The idle-animation scheduler stays owned by that transition.
         if not self._hide_on_idle:
             try:
-                self._orb.show(mode="idle")
+                self._show_rest_mode()
             except Exception as exc:  # noqa: BLE001
                 log.debug("session-ended idle repaint failed: %s", exc)
 
@@ -801,6 +827,9 @@ class OrbBusBridge:
                 "Overlay startup visibility released after voice became usable (%s).",
                 reason,
             )
+            # Background state that arrived while the bar was still gated is
+            # shown now, on the first moment the bar is allowed to be seen.
+            self._apply_hud_rest_projection()
         except Exception:  # noqa: BLE001
             # Leave the latch open to a later genuine readiness event instead of
             # converting a transient surface error into a permanent hidden bar.
@@ -959,7 +988,7 @@ class OrbBusBridge:
                 # next wake word" path (a transient STT/provider ERROR or a manual
                 # pause took it off screen). The salute + idle-animation scheduler
                 # belong only to a genuine return to IDLE.
-                self._orb.show(mode="idle")
+                self._show_rest_mode()
                 if state == "IDLE":
                     if prev_state == "SPEAKING":
                         self._orb.play_animation("salute")
@@ -1390,7 +1419,9 @@ class OrbBusBridge:
                 # surface now — its own lane will stand it down.
                 return
             self._show_listening_transcript("")
-            restore = self._current_voice_mode() if self._voice_session_active else "idle"
+            restore = (
+                self._current_voice_mode() if self._voice_session_active else self._rest_mode()
+            )
             try:
                 if restore == "idle" and self._hide_on_idle:
                     self._orb.hide()
@@ -1456,7 +1487,7 @@ class OrbBusBridge:
                 if self._hide_on_idle:
                     self._orb.hide()
                 else:
-                    self._orb.show(mode="idle")
+                    self._show_rest_mode()
             except Exception as exc:  # noqa: BLE001
                 log.debug("OrbBridge dictation fail-safe repaint suppressed: %s", exc)
 
@@ -1485,7 +1516,7 @@ class OrbBusBridge:
                 if self._hide_on_idle:
                     self._orb.hide()
                 else:
-                    self._orb.show(mode="idle")
+                    self._show_rest_mode()
             except Exception as exc:  # noqa: BLE001
                 log.debug("OrbBridge dictation idle repaint suppressed: %s", exc)
 
@@ -1547,7 +1578,7 @@ class OrbBusBridge:
             if self._hide_on_idle:
                 self._orb.hide()
             else:
-                self._orb.show(mode="idle")
+                self._show_rest_mode()
             # Only (re-)start the idle scheduler if we're still in the IDLE
             # state (no new wake sequence came in during the salute).
             if self._last_state == "IDLE":
@@ -1691,6 +1722,110 @@ class OrbBusBridge:
 
     # --- Live surface swap (display-style toggle) ----------------------
 
+    # --- HUD projection (N-16) -------------------------------------------
+
+    def _attach_hud(self) -> None:
+        """Listen to the canonical HUD adapter. Idempotent, failure-isolated."""
+        if self._hud is None or self._hud_unsubscribe is not None:
+            return
+        try:
+            self._hud_unsubscribe = self._hud.add_listener(self._on_hud_snapshot)
+            self._hud_snapshot = self._hud.snapshot()
+        except Exception:  # noqa: BLE001 — the orb must work without the HUD
+            log.warning("OrbBridge could not attach to the HUD adapter", exc_info=True)
+            self._hud_unsubscribe = None
+
+    def detach_hud(self) -> None:
+        unsubscribe = self._hud_unsubscribe
+        self._hud_unsubscribe = None
+        if callable(unsubscribe):
+            unsubscribe()
+
+    def _rest_mode(self) -> str:
+        """The coarse mode for a surface whose voice lane is at rest.
+
+        A surface that hides when idle (the mascot, a non-persistent bar) never
+        rests on a background look — revealing it for a mission would resurrect
+        it outside a session. Everything else rests on the HUD projection.
+        """
+        if self._hide_on_idle:
+            return "idle"
+        return rest_mode(self._hud_snapshot)
+
+    def _show_rest_mode(self) -> None:
+        """Paint the rest look; a surface that rejects a HUD mode rests idle."""
+        mode = self._rest_mode()
+        if mode != "idle":
+            try:
+                self._orb.show(mode=mode)
+                self._hud_rest_mode = mode
+                return
+            except Exception as exc:  # noqa: BLE001 — an older surface lacks the look
+                log.debug("OrbBridge HUD rest mode %r unsupported: %s", mode, exc)
+        self._orb.show(mode="idle")
+        self._hud_rest_mode = "idle"
+
+    def _voice_lane_at_rest(self) -> bool:
+        """No session, preview, dictation, notice or hand-off animation owns
+        the surface — the only moment background state may be painted."""
+        def _idle_task(task: asyncio.Task | None) -> bool:
+            return task is None or task.done()
+
+        return (
+            self._last_state in ("IDLE", "ERROR", "PAUSED")
+            and not self._voice_session_active
+            and not self._wake_candidate_active
+            and not self._dictation_active
+            and _idle_task(self._dictation_standdown_task)
+            and _idle_task(self._hangup_task)
+            and _idle_task(self._completion_task)
+        )
+
+    def _on_hud_snapshot(self, snapshot: HudSnapshot) -> None:
+        """HUD listener: store the canonical snapshot and project it at rest.
+
+        Never raises (a presentation failure must not reach the adapter, and
+        the adapter isolates listeners anyway). Never reveals a hidden surface,
+        never paints over a live turn, a dictation or a notice in flight.
+        """
+        previous = self._hud_snapshot
+        self._hud_snapshot = snapshot
+        try:
+            if is_new_global_error(previous, snapshot):
+                self._project_global_error()
+                return
+            self._apply_hud_rest_projection()
+        except Exception:  # noqa: BLE001 — cosmetic; backend state is untouched
+            log.debug("OrbBridge HUD projection repaint suppressed", exc_info=True)
+
+    def _project_global_error(self) -> None:
+        """ERROR is shown transiently: a notice dwell, then the rest look.
+
+        A resting ``notice`` would make the bar inert to clicks for as long as
+        the error lasts — the user could not even start a new session to
+        recover. The persistent, readable error lives in the HUD workspace.
+        """
+        if self._hide_on_idle or not self._boot_visibility_released:
+            return
+        if not self._voice_lane_at_rest():
+            return
+        self._show_notice_mode()
+        self._hud_rest_mode = None
+        self._schedule_notice_standdown(ERROR_NOTICE_DWELL_S)
+
+    def _apply_hud_rest_projection(self) -> None:
+        if self._hud is None or self._hide_on_idle or not self._boot_visibility_released:
+            return
+        if not self._voice_lane_at_rest():
+            return
+        desired = self._rest_mode()
+        # A surface nobody painted for the HUD yet is resting on idle already;
+        # an idle projection onto it must not cost a repaint (or a z-order
+        # change on a freshly released boot bar).
+        if desired == (self._hud_rest_mode or "idle"):
+            return
+        self._show_rest_mode()
+
     def set_surface(self, surface) -> None:
         """Repoint the bridge at a NEW overlay surface for a live style swap.
 
@@ -1701,6 +1836,7 @@ class OrbBusBridge:
         The caller tears the old surface down afterwards.
         """
         self._orb = surface
+        self._hud_rest_mode = None
         # Visibility release is per surface, not merely per bridge. A user can
         # switch to "none" during warm-up and back to the cached boot bar after
         # ready; that original bar must then have its still-active gate released
