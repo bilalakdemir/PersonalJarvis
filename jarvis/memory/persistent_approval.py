@@ -186,6 +186,39 @@ class PersistentMemoryApprovalQueue:
         await cur.close()
         return _row_to_item(row) if row is not None else None
 
+    async def pending(self, *, limit: int = 100) -> list[PersistentMemoryApproval]:
+        """Return unexpired approvals still waiting for an exact user decision."""
+        conn = await self._ensure_open()
+        now_ms = int(self._clock() * 1000)
+        cur = await conn.execute(
+            """
+            SELECT *
+            FROM memory_persistent_approvals
+            WHERE status = 'pending' AND expires_ms > ?
+            ORDER BY created_ms, id
+            LIMIT ?
+            """,
+            (now_ms, max(1, int(limit))),
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+        return [_row_to_item(row) for row in rows]
+
+    async def replay_pending(self, *, limit: int = 100) -> int:
+        """Re-emit metadata-only approval cards after a process restart."""
+        items = await self.pending(limit=limit)
+        for item in items:
+            await self._publish(
+                MemoryPromotionProposed(
+                    source_layer="memory",
+                    candidate_id=item.candidate_id,
+                    proposal_digest=item.proposal_digest,
+                    governance_class=item.governance_class,
+                    expires_ms=item.expires_ms,
+                )
+            )
+        return len(items)
+
     async def approve(
         self,
         *,
