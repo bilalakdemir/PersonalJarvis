@@ -1125,12 +1125,19 @@ class HudReducer:
         candidate_id = _positive_int(getattr(event, "candidate_id", None))
         existing = self._approvals.get(approval_id)
         if existing is not None:
+            exact_queue_id = existing.queue_item_id or queue_item_id
             self._approvals[approval_id] = replace(
                 existing,
-                queue_item_id=existing.queue_item_id or queue_item_id,
+                decision_channel=(
+                    "project_state_api" if exact_queue_id is not None else existing.decision_channel
+                ),
+                queue_item_id=exact_queue_id,
                 candidate_id=existing.candidate_id or candidate_id,
                 files_affected=existing.files_affected or files,
                 target_preview=existing.target_preview or ", ".join(files),
+                read_only_reason=(
+                    "" if exact_queue_id is not None else existing.read_only_reason
+                ),
             )
             return self._approvals[approval_id] != existing
         for orphan_key in (approval_id, f"project_state:{project_id}:{transaction_id}"):
@@ -1144,7 +1151,9 @@ class HudReducer:
                 approval_id=approval_id,
                 kind="project_state",
                 action="Project state change",
-                decision_channel="none",
+                decision_channel=(
+                    "project_state_api" if queue_item_id is not None else "none"
+                ),
                 reason="governed_project_state",
                 target_preview=", ".join(files),
                 trace_id=_trace(event),
@@ -1155,7 +1164,9 @@ class HudReducer:
                 candidate_id=candidate_id,
                 files_affected=files,
                 requested_at_ns=ts,
-                read_only_reason=_READ_ONLY_PROJECT_STATE,
+                read_only_reason=(
+                    "" if queue_item_id is not None else _READ_ONLY_PROJECT_STATE
+                ),
             ),
             ts,
         )
@@ -1536,13 +1547,13 @@ class HudReducer:
                 approval_id=approval_id,
                 kind="memory_promotion",
                 action="Persistent memory promotion",
-                decision_channel="none",
+                decision_channel="memory_promotion_api",
                 reason=_safe(event.governance_class, LABEL_CHARS),
                 candidate_id=candidate_id,
                 proposal_digest=digest,
                 requested_at_ns=ts,
                 expires_at_ns=expires_ms * 1_000_000,
-                read_only_reason=_READ_ONLY_NO_ROUTE,
+                read_only_reason="",
             ),
             ts,
         )
