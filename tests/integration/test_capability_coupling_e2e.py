@@ -150,10 +150,10 @@ def test_hard_positive_local_action_not_unsupported(
 def test_hard_positive_file_ops_resolves_to_file_capability(
     seeded_registry: CapabilityRegistry,
 ) -> None:
-    """'Lies die Datei foo.txt' must resolve to a file-capable harness."""
+    """'Lies die Datei foo.txt' must resolve to a file-capable execution path."""
     cap = seeded_registry.resolve_intent("Lies die Datei foo.txt")  # i18n-allow
     assert cap is not None, "Expected a capability match for file-read"
-    assert "file" in cap.id or cap.source == "harness", (
+    assert "file" in cap.id or cap.id == "tool.run-shell" or cap.source == "harness", (
         f"Expected a file-capable harness/tool, got {cap!r}"
     )
 

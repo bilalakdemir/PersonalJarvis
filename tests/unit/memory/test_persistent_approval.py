@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from jarvis.core.bus import EventBus
+from jarvis.core.memory_events import MemoryPromotionProposed
 from jarvis.memory.persistent_approval import (
     PersistentMemoryApprovalError,
     PersistentMemoryApprovalIdentityError,
@@ -75,6 +77,44 @@ async def test_exact_persistent_approval_survives_restart(
         assert applied.status == "applied"
     finally:
         await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_pending_approval_replays_metadata_after_restart(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "jarvis.db"
+    now = [1_000.0]
+    journal, candidate_id = _candidate(db_path, clock=lambda: now[0])
+    first = PersistentMemoryApprovalQueue(db_path, clock=lambda: now[0])
+    proposal = await first.propose(
+        candidate_id=candidate_id,
+        content="Use the approved release checklist from now on.",
+        governance_class="user-wide-decision",
+    )
+    await first.close()
+
+    bus = EventBus()
+    seen: list[MemoryPromotionProposed] = []
+
+    async def _capture(event: MemoryPromotionProposed) -> None:
+        seen.append(event)
+
+    bus.subscribe(MemoryPromotionProposed, _capture)
+    reopened = PersistentMemoryApprovalQueue(
+        db_path,
+        clock=lambda: now[0],
+        bus=bus,
+    )
+    try:
+        assert await reopened.replay_pending() == 1
+        assert len(seen) == 1
+        assert seen[0].candidate_id == candidate_id
+        assert seen[0].proposal_digest == proposal.proposal_digest
+        assert seen[0].governance_class == "user-wide-decision"
+    finally:
+        await reopened.close()
+        journal.close()
 
 
 @pytest.mark.asyncio

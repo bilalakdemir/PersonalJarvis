@@ -17,7 +17,11 @@ import pytest
 
 from jarvis.core.bus import EventBus
 from jarvis.core.config import SafetyConfig
-from jarvis.core.events import ActionApprovalRequired, ActionExecuted
+from jarvis.core.events import (
+    ActionApprovalRequired,
+    ActionConfirmationDeferred,
+    ActionExecuted,
+)
 from jarvis.core.protocols import ExecutionContext, ToolResult
 from jarvis.safety.approval import ApprovalWorkflow
 from jarvis.safety.risk_tier import RiskTierEvaluator
@@ -70,7 +74,9 @@ def _executor() -> tuple[ToolExecutor, _BlockingApproval, EventBus]:
 
 @pytest.mark.asyncio
 async def test_voice_confirm_defers_instead_of_blocking() -> None:
-    executor, approval, _bus = _executor()
+    executor, approval, bus = _executor()
+    deferred: list[ActionConfirmationDeferred] = []
+    bus.subscribe(ActionConfirmationDeferred, lambda e: deferred.append(e))  # type: ignore[arg-type]
     tool = _AskTool()
     tid = uuid4()
     result = await executor.execute(
@@ -86,6 +92,12 @@ async def test_voice_confirm_defers_instead_of_blocking() -> None:
     assert result.error == VOICE_CONFIRM_SENTINEL
     assert result.output["tool_name"] == "gmail"
     assert result.output["trace_id"] == str(tid)
+    await _drain(bus)
+    assert len(deferred) == 1
+    assert deferred[0].trace_id == tid
+    assert deferred[0].tool_name == "gmail"
+    assert deferred[0].risk_tier == "ask"
+    assert deferred[0].reason == "risk_tier"
 
 
 class _DescribingTool(_AskTool):

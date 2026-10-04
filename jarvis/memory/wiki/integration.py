@@ -140,10 +140,103 @@ class WikiIntegrationHandle:
         default=None
     )
     _persistent_approval_queue: Any = field(default=None)
+    _project_state_approval_lifecycle: Any = field(default=None)
+    _project_state_prepare_tasks: dict[int, asyncio.Task[Any]] = field(default_factory=dict)
     # Contact → person-page mirror: detach callback (notify sink + bus
     # subscription) and the boot reconciliation task.
     _contact_mirror_cleanup: Callable[[], None] | None = field(default=None)
     _contact_reconcile_task: asyncio.Task[Any] | None = field(default=None)
+
+    @property
+    def persistent_approval_queue(self) -> Any:
+        """Return the live exact-identity persistent-memory approval queue."""
+        return self._persistent_approval_queue
+
+    @property
+    def project_state_approval_lifecycle(self) -> Any:
+        """Return the live governed project-state approval/apply lifecycle."""
+        return self._project_state_approval_lifecycle
+
+    def request_governed_memory_resume(self) -> bool:
+        """Schedule the existing Stage-2 journal drain after a human decision."""
+        scheduler = self._scheduler
+        if scheduler is None:
+            return False
+        try:
+            from jarvis.memory.wiki.scheduler import fire_journal_trigger
+
+            fire_journal_trigger(
+                scheduler,
+                name="wiki-governance-decision-trigger",
+                log_context="governed memory decision",
+            )
+        except RuntimeError as exc:
+            log.debug(
+                "wiki_integration: governed memory resume trigger unavailable: %s",
+                exc,
+            )
+            return False
+        return True
+
+    def schedule_project_state_proposal(self, queue_item_id: int) -> bool:
+        """Prepare one durable project-state proposal without blocking EventBus."""
+        lifecycle = self._project_state_approval_lifecycle
+        if lifecycle is None:
+            return False
+        item_id = int(queue_item_id)
+        if item_id <= 0:
+            return False
+        existing = self._project_state_prepare_tasks.get(item_id)
+        if existing is not None and not existing.done():
+            return True
+        task = asyncio.create_task(
+            lifecycle.prepare(item_id),
+            name=f"memory-project-state-proposal-{item_id}",
+        )
+        self._project_state_prepare_tasks[item_id] = task
+
+        def _done(done: asyncio.Task[Any]) -> None:
+            if self._project_state_prepare_tasks.get(item_id) is done:
+                self._project_state_prepare_tasks.pop(item_id, None)
+            if done.cancelled():
+                return
+            exc = done.exception()
+            if exc is not None:
+                log.warning(
+                    "wiki_integration: project-state proposal %d preparation failed: %s",
+                    item_id,
+                    exc,
+                )
+
+        task.add_done_callback(_done)
+        return True
+
+    def schedule_project_state_recovery(self) -> bool:
+        """Replay waiting cards and resume exact approvals after restart."""
+        lifecycle = self._project_state_approval_lifecycle
+        if lifecycle is None:
+            return False
+        recovery_key = 0  # durable queue IDs are strictly positive
+        existing = self._project_state_prepare_tasks.get(recovery_key)
+        if existing is not None and not existing.done():
+            return True
+        task = asyncio.create_task(
+            lifecycle.recover_pending(limit=100),
+            name="memory-project-state-recovery",
+        )
+        self._project_state_prepare_tasks[recovery_key] = task
+
+        def _done(done: asyncio.Task[Any]) -> None:
+            if self._project_state_prepare_tasks.get(recovery_key) is done:
+                self._project_state_prepare_tasks.pop(recovery_key, None)
+            if done.cancelled():
+                return
+            exc = done.exception()
+            if exc is not None:
+                log.warning("wiki_integration: project-state recovery failed: %s", exc)
+
+        task.add_done_callback(_done)
+        return True
 
     async def shutdown(self) -> None:
         """Unsubscribe the ``IdleEntered`` handler and cancel pending tasks.
@@ -193,6 +286,20 @@ class WikiIntegrationHandle:
                 log.debug("wiki_integration: voice_bridge.stop() failed; continuing teardown")
             self._voice_bridge = None
 
+        # Project-state proposal planning may call an LLM. Stop those tracked
+        # tasks before closing the queue/journal they read from.
+        if self._project_state_prepare_tasks:
+            pending_proposals = {
+                task
+                for task in self._project_state_prepare_tasks.values()
+                if not task.done()
+            }
+            for task in pending_proposals:
+                task.cancel()
+            if pending_proposals:
+                await asyncio.gather(*pending_proposals, return_exceptions=True)
+            self._project_state_prepare_tasks.clear()
+
         # A journal-pressure trigger is a separate scheduler task, not owned by
         # the bridge. Drain/cancel it before closing the same SQLite journal.
         if self._scheduler is not None:
@@ -238,6 +345,18 @@ class WikiIntegrationHandle:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110
                 pass
         self._telemetry_task = None
+
+        # Close the project-state proposal store before the durable promotion
+        # queue and shared candidate journal it references.
+        if self._project_state_approval_lifecycle is not None:
+            try:
+                await self._project_state_approval_lifecycle.close()
+            except Exception:  # noqa: BLE001
+                log.debug(
+                    "wiki_integration: project-state approval lifecycle cleanup failed",
+                    exc_info=True,
+                )
+            self._project_state_approval_lifecycle = None
 
         # Detach and close the durable promotion queue after Stage-2
         # producers are stopped, but before closing the shared SQLite-backed
@@ -562,10 +681,16 @@ async def bootstrap_wiki_integration(
                 attach_project_state_route_queue,
             )
 
+            async def _schedule_project_proposal(item: Any) -> None:
+                # Enqueue is the authority boundary. Proposal planning can be
+                # expensive, so schedule it only after the durable row exists.
+                handle.schedule_project_state_proposal(item.id)
+
             promotion_queue, promotion_queue_cleanup = (
                 await attach_project_state_route_queue(
                     bus=bus,
                     db_path=db_path,
+                    on_enqueued=_schedule_project_proposal,
                 )
             )
             handle._promotion_queue = promotion_queue  # noqa: SLF001
@@ -595,14 +720,63 @@ async def bootstrap_wiki_integration(
             handle._persistent_approval_queue = (  # noqa: SLF001
                 persistent_approval_queue
             )
+            replayed = await persistent_approval_queue.replay_pending(limit=100)
             log.info(
-                "wiki_integration: persistent-memory approval queue attached"
+                "wiki_integration: persistent-memory approval queue attached "
+                "(replayed=%d)",
+                replayed,
             )
         except Exception as exc:  # noqa: BLE001
             persistent_approval_queue = None
             log.warning(
                 "wiki_integration: persistent-memory approval queue unavailable "
                 "(%s) — governed candidates remain pending",
+                exc,
+            )
+
+    # N-19: own the N-14H project-state proposal lifecycle in the same
+    # runtime that owns its durable queue/journal. The event subscriber above
+    # only enqueues; planning is a tracked background task so EventBus stays
+    # responsive. A bounded startup drain recovers rows queued before a crash.
+    if (
+        promotion_queue is not None
+        and journal is not None
+        and db_path is not None
+    ):
+        try:
+            from jarvis.memory.project_state_approval import (
+                ProjectStateMemoryApprovalLifecycle,
+            )
+            from jarvis.memory.project_state_planner import ProjectStateMemoryPlanner
+            from jarvis.projects.registry import load_registry
+
+            registry = load_registry()
+            planner = ProjectStateMemoryPlanner(
+                queue=promotion_queue,
+                journal=journal,
+                registry=registry,
+                root_config=root_cfg,
+            )
+            project_state_lifecycle = ProjectStateMemoryApprovalLifecycle(
+                queue=promotion_queue,
+                journal=journal,
+                registry=registry,
+                db_path=db_path,
+                planner=planner,
+                bus=bus,
+            )
+            handle._project_state_approval_lifecycle = project_state_lifecycle  # noqa: SLF001
+            for pending_item in await promotion_queue.pending(limit=100):
+                handle.schedule_project_state_proposal(pending_item.id)
+            handle.schedule_project_state_recovery()
+            log.info(
+                "wiki_integration: governed project-state approval lifecycle attached"
+            )
+        except Exception as exc:  # noqa: BLE001
+            handle._project_state_approval_lifecycle = None  # noqa: SLF001
+            log.warning(
+                "wiki_integration: project-state approval lifecycle unavailable "
+                "(%s) — durable queue rows remain pending",
                 exc,
             )
 

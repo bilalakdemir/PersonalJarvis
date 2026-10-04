@@ -60,10 +60,23 @@ ERROR_SCOPES: Final[tuple[str, ...]] = ("global", "operation", "agent", "project
 #:   the ``(mission_id, trace_id)`` the card carries.
 #: - ``chat_card`` — a typed-chat turn's own approval card answers it
 #:   (``agent_chat.approval_bridge``); the HUD shows it read-only.
-#: - ``none`` — no safe decision route exists on this build (e.g. governed
-#:   project-state proposals until the N-14H route lands). Read-only.
-ApprovalDecisionChannel = Literal["mission_tool_api", "chat_card", "none"]
-DECISION_CHANNELS: Final[tuple[str, ...]] = ("mission_tool_api", "chat_card", "none")
+#: - ``project_state_api`` — exact N-14H project-state proposal identity.
+#: - ``memory_promotion_api`` — exact persistent-memory candidate + digest.
+#: - ``none`` — no safe out-of-band route; read-only.
+ApprovalDecisionChannel = Literal[
+    "mission_tool_api",
+    "project_state_api",
+    "memory_promotion_api",
+    "chat_card",
+    "none",
+]
+DECISION_CHANNELS: Final[tuple[str, ...]] = (
+    "mission_tool_api",
+    "project_state_api",
+    "memory_promotion_api",
+    "chat_card",
+    "none",
+)
 
 ApprovalKind = Literal["tool_call", "project_state", "memory_promotion"]
 APPROVAL_KINDS: Final[tuple[str, ...]] = ("tool_call", "project_state", "memory_promotion")

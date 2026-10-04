@@ -6069,6 +6069,7 @@
       "read_only": {
         "no_out_of_band_route": "Esta solicitud solo puede responderse donde se planteó.",
         "answered_in_chat": "Responde a esta solicitud en su chat.",
+        "answered_in_conversation": "Responde a esta solicitud en la conversación donde se planteó.",
         "project_state_route_unavailable": "Los cambios de estado del proyecto aún no se pueden aprobar desde el HUD."
       }
     },

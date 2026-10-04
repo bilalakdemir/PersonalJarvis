@@ -170,7 +170,6 @@
     "tests.unit.ui.web.test_society_routes::test_memory_file_serves_society_page_and_refuses_escape",
     "tests.unit.ui.web.test_update_routes::test_apply_falls_back_to_cached_release_when_refetch_fails",
     "tests.unit.ui.web.test_update_routes::test_apply_git_fetch_failure_is_502",
-    "tests.unit.ui.web.test_update_routes::test_apply_happy_path_pulls_and_signals_restart",
     "tests.unit.ui.web.test_update_routes::test_apply_invalidates_status_cache",
     "tests.unit.ui.web.test_update_routes::test_apply_preserves_headless_profile_for_deferred_installer",
     "tests.unit.ui.web.test_update_routes_frozen::test_apply_downloads_verifies_and_hands_over",

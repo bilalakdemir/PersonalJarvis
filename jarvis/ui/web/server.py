@@ -388,6 +388,7 @@ class WebServer:
         from .local_models_routes import router as local_models_router
         from .marketplace_publish_routes import router as marketplace_publish_router
         from .marketplace_routes import router as marketplace_router
+        from .memory_governance_routes import router as memory_governance_router
         from .mcp_routes import router as mcp_router
         from .missions_auth import router as missions_auth_router
         from .missions_pty_routes import router as missions_pty_router
@@ -507,6 +508,9 @@ class WebServer:
         app.include_router(costs_router)
         # N-17 HUD workspace: read-only snapshot for reconnect/reload/resume.
         app.include_router(hud_router)
+        # N-19: exact-identity decisions owned by memory/project governance.
+        # This is intentionally separate from the read-only HUD router.
+        app.include_router(memory_governance_router)
         # Command Registry — the one machine-readable catalog of app commands
         # (consumed by the app-command brain tool, the UI, CLI, and docs gen).
         app.include_router(commands_router)
@@ -680,6 +684,9 @@ class WebServer:
         # skills_routes). Other routes will use it too going forward.
         app.state.config = self.cfg
         app.state.bus = self.bus
+        # Governed memory/project-state decision routes fail closed until the
+        # Wiki/N-14 runtime is bootstrapped in start().
+        app.state.memory_governance_handle = None
         # Read-only HUD projection for GET /api/hud/snapshot.
         app.state.hud = self._hud
 
@@ -3333,6 +3340,7 @@ class WebServer:
             voice_bridge_config=self.cfg.memory.wiki.voice_bridge,
         )
         self._wiki_integration_handle = handle
+        self.app.state.memory_governance_handle = handle
         logger.info("wiki_integration: bootstrap_wiki_integration succeeded")
         # Safety net for realtime turns whose live capture was missed (empty
         # provider input transcript, crash, provider outage): sweep persisted
@@ -4143,6 +4151,7 @@ class WebServer:
 
         # Phase B5 wiki write-wiring: unsubscribe + drain in-flight rollup task.
         wiki_handle = getattr(self, "_wiki_integration_handle", None)
+        self.app.state.memory_governance_handle = None
         if wiki_handle is not None:
             try:
                 await wiki_handle.shutdown()

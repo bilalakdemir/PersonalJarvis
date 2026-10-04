@@ -167,6 +167,39 @@ async def test_event_bus_route_is_idempotent_and_cleanup_unsubscribes(
 
 
 @pytest.mark.asyncio
+async def test_route_callback_receives_the_durable_exact_item(tmp_path: Path) -> None:
+    bus = EventBus()
+    seen = []
+
+    async def _on_enqueued(item) -> None:  # noqa: ANN001
+        seen.append(item)
+
+    queue, cleanup = await attach_project_state_route_queue(
+        bus=bus,
+        db_path=tmp_path / "jarvis.db",
+        on_enqueued=_on_enqueued,
+    )
+    event = ProjectStateMemoryProposalRequested(
+        source_layer="memory",
+        project_id="personal-jarvis",
+        candidate_id=23,
+        source_state_revision="a" * 64,
+        current_task="N-19 — Core Integration & Regression Gate",
+        relation="execution-status",
+    )
+    try:
+        await bus.publish(event)
+        stored = await queue.pending()
+    finally:
+        await cleanup()
+
+    assert len(stored) == 1
+    assert len(seen) == 1
+    assert seen[0] == stored[0]
+    assert seen[0].candidate_id == 23
+
+
+@pytest.mark.asyncio
 async def test_secret_shaped_queue_metadata_is_rejected(tmp_path: Path) -> None:
     queue = MemoryPromotionQueue(tmp_path / "jarvis.db")
 

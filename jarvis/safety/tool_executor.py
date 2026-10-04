@@ -21,6 +21,7 @@ from uuid import UUID, uuid4
 from jarvis.core.bus import EventBus
 from jarvis.core.events import (
     ActionApprovalRequired,
+    ActionConfirmationDeferred,
     ActionDenied,
     ActionExecuted,
     ActionProposed,
@@ -532,6 +533,20 @@ class ToolExecutor:
                 log.info(
                     "voice-confirm: deferring %s (tier=%s) for two-turn confirmation",
                     tool.name, decision.tier,
+                )
+                reason = (
+                    "plausibility"
+                    if plaus is not None and plaus.require_confirmation
+                    else "risk_tier"
+                )
+                await self._bus.publish(
+                    ActionConfirmationDeferred(
+                        trace_id=tid,
+                        tool_name=tool.name,
+                        risk_tier=decision.tier,
+                        reason=reason,
+                        args_preview=safe_preview(args),
+                    )
                 )
                 sentinel_output: dict[str, Any] = {
                     "tool_name": tool.name,

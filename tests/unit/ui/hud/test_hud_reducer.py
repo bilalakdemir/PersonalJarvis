@@ -13,6 +13,7 @@ import pytest
 
 from jarvis.core.events import (
     ActionApprovalRequired,
+    ActionConfirmationDeferred,
     ActionApproved,
     ActionDenied,
     ActionExecuted,
@@ -81,6 +82,50 @@ def snap(reducer: HudReducer, now_s: float = 10.0):
 
 def state(new: str, ts: float, prev: str = "IDLE") -> SystemStateChanged:
     return SystemStateChanged(new_state=new, previous=prev, timestamp_ns=at(ts))
+
+
+def test_conversational_confirmation_is_visible_until_answered() -> None:
+    r = HudReducer()
+    tid = uuid4()
+    r.apply(
+        ActionProposed(
+            trace_id=tid,
+            tool_name="gmail",
+            args={"action": "send_message"},
+            risk_tier="ask",
+            timestamp_ns=at(1),
+        )
+    )
+    r.apply(
+        ActionConfirmationDeferred(
+            trace_id=tid,
+            tool_name="gmail",
+            risk_tier="ask",
+            reason="risk_tier",
+            args_preview="send_message",
+            timestamp_ns=at(2),
+        )
+    )
+    waiting = snap(r, 3)
+    assert waiting.primary_state == "WAITING_FOR_APPROVAL"
+    assert len(waiting.approval_requests) == 1
+    card = waiting.approval_requests[0]
+    assert card.trace_id == str(tid)
+    assert card.action == "gmail"
+    assert card.decision_channel == "none"
+    assert card.read_only_reason == "answered_in_conversation"
+
+    r.apply(
+        ActionDenied(
+            trace_id=tid,
+            tool_name="gmail",
+            reason="voice_vetoed",
+            timestamp_ns=at(4),
+        )
+    )
+    done = snap(r, 5)
+    assert done.approval_requests == ()
+    assert done.active_operations == ()
 
 
 # --------------------------------------------------------------------------- primary
@@ -744,7 +789,8 @@ def test_governed_memory_lifecycle_projects_metadata_and_exact_approval() -> Non
     }
     card = next(c for c in before.approval_requests if c.candidate_id == 7)
     assert card.kind == "memory_promotion"
-    assert card.decision_channel == "none"
+    assert card.decision_channel == "memory_promotion_api"
+    assert card.read_only_reason == ""
     assert card.proposal_digest == "digest-7"
 
     r.apply(
@@ -888,7 +934,8 @@ def test_durable_proposal_and_engine_request_share_one_exact_card() -> None:
     card = cards[0]
     assert card.approval_id == "project_state:p1:tx-1:d-1"
     assert (card.queue_item_id, card.candidate_id) == (7, 70)
-    assert card.decision_channel == "none"
+    assert card.decision_channel == "project_state_api"
+    assert card.read_only_reason == ""
 
 
 def test_durable_decision_closes_exactly_its_proposal() -> None:

@@ -280,6 +280,25 @@ class ProjectStateProposalStore:
         row = await _fetch_proposal_row(conn, queue_item_id)
         return _row_to_stored(row) if row is not None else None
 
+    async def active(self, *, limit: int = 100) -> list[StoredProjectStateProposal]:
+        """Return unexpired proposals awaiting a decision or an approved apply."""
+        conn = await self._ensure_open()
+        now_ms = int(self._clock() * 1000)
+        cur = await conn.execute(
+            """
+            SELECT *
+            FROM memory_project_state_proposals
+            WHERE status IN ('awaiting-approval', 'approved')
+              AND expires_ms > ?
+            ORDER BY created_ms, id
+            LIMIT ?
+            """,
+            (now_ms, max(1, int(limit))),
+        )
+        rows = await cur.fetchall()
+        await cur.close()
+        return [_row_to_stored(row) for row in rows]
+
     async def approve_identity(
         self,
         *,
@@ -545,6 +564,47 @@ class ProjectStateMemoryApprovalLifecycle:
             )
         )
         return stored
+
+    async def recover_pending(self, *, limit: int = 100) -> tuple[int, int]:
+        """Restore durable approval visibility and resume approved applies.
+
+        Returns a pair of replayed and resumed counts. Awaiting proposals are
+        republished as metadata-only cards. Already-approved proposals reuse
+        their exact durable identity and continue through approve_and_apply.
+        """
+        replayed = 0
+        resumed = 0
+        for stored in await self._proposals.active(limit=limit):
+            if stored.status == "awaiting-approval":
+                await self._publish(
+                    ProjectStateMemoryProposalCreated(
+                        source_layer="memory",
+                        project_id=stored.project_id,
+                        queue_item_id=stored.queue_item_id,
+                        candidate_id=stored.candidate_id,
+                        transaction_id=stored.transaction_id,
+                        proposal_digest=stored.proposal_digest,
+                        source_state_revision=stored.source_state_revision,
+                        files_affected=stored.proposal.files_affected,
+                    )
+                )
+                replayed += 1
+                continue
+            if stored.status == "approved":
+                try:
+                    await self.approve_and_apply(
+                        queue_item_id=stored.queue_item_id,
+                        transaction_id=stored.transaction_id,
+                        proposal_digest=stored.proposal_digest,
+                    )
+                    resumed += 1
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "project-state approved proposal %d recovery failed: %s",
+                        stored.queue_item_id,
+                        exc,
+                    )
+        return replayed, resumed
 
     async def reject(
         self,

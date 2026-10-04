@@ -58,6 +58,42 @@ describe("decideHudApproval", () => {
     );
   });
 
+  it("routes an exact project-state decision to its owning API", async () => {
+    const fetchMock = mockFetch();
+    await decideHudApproval(
+      card({
+        kind: "project_state",
+        decision_channel: "project_state_api",
+        mission_id: null,
+        queue_item_id: 13,
+        transaction_id: "tx/one",
+        proposal_digest: "digest+one",
+      }),
+      "approve",
+    );
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/memory/governance/project-state/13/tx%2Fone/digest%2Bone/approve",
+    );
+    expect(fetchMock.mock.calls[0][1]).toEqual({ method: "POST" });
+  });
+
+  it("routes an exact persistent-memory rejection to its owning API", async () => {
+    const fetchMock = mockFetch();
+    await decideHudApproval(
+      card({
+        kind: "memory_promotion",
+        decision_channel: "memory_promotion_api",
+        mission_id: null,
+        candidate_id: 17,
+        proposal_digest: "digest/17",
+      }),
+      "deny",
+    );
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/memory/governance/persistent/17/digest%2F17/reject",
+    );
+  });
+
   it("refuses every read-only channel without touching the network", async () => {
     const fetchMock = mockFetch();
     const readOnly = [
@@ -71,6 +107,21 @@ describe("decideHudApproval", () => {
         proposal_digest: "digest",
       }),
       card({ mission_id: null }),
+      card({
+        kind: "project_state",
+        decision_channel: "project_state_api",
+        mission_id: null,
+        queue_item_id: null,
+        transaction_id: "tx",
+        proposal_digest: "digest",
+      }),
+      card({
+        kind: "memory_promotion",
+        decision_channel: "memory_promotion_api",
+        mission_id: null,
+        candidate_id: null,
+        proposal_digest: "digest",
+      }),
     ];
     for (const item of readOnly) {
       await expect(decideHudApproval(item, "approve")).rejects.toBeInstanceOf(

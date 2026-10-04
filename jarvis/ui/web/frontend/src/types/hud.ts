@@ -30,12 +30,14 @@ export type HudActivityStatus = (typeof HUD_ACTIVITY_STATUSES)[number];
 export const HUD_ERROR_SCOPES = ["global", "operation", "agent", "project", "component"] as const;
 export type HudErrorScope = (typeof HUD_ERROR_SCOPES)[number];
 
-/**
- * Who owns the decision for an approval card. Only `mission_tool_api` has an
- * out-of-band route the HUD may call — for exactly the card's
- * `(mission_id, trace_id)`. Every other channel renders read-only.
- */
-export const HUD_DECISION_CHANNELS = ["mission_tool_api", "chat_card", "none"] as const;
+/** Who owns the exact decision for an approval card. */
+export const HUD_DECISION_CHANNELS = [
+  "mission_tool_api",
+  "project_state_api",
+  "memory_promotion_api",
+  "chat_card",
+  "none",
+] as const;
 export type HudDecisionChannel = (typeof HUD_DECISION_CHANNELS)[number];
 
 export const HUD_APPROVAL_KINDS = ["tool_call", "project_state", "memory_promotion"] as const;
