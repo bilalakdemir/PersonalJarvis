@@ -157,6 +157,48 @@ export interface ReactorStyle {
   pattern: "solid" | "dashed" | "dotted" | "double" | "segmented" | "broken";
 }
 
+
+export type AerionVisualState =
+  | "OFF"
+  | "STANDBY"
+  | "LISTENING"
+  | "THINKING"
+  | "WORKING"
+  | "WAITING_FOR_APPROVAL"
+  | "SPEAKING"
+  | "ERROR"
+  | "COMPLETED";
+
+const AERION_COMPLETION_WINDOW_MS = 1500;
+
+/**
+ * AERION's cinematic state is presentation only. It is derived from the
+ * canonical HUD snapshot plus the client connection state and never becomes a
+ * second operational state machine.
+ */
+export function aerionVisualState(
+  snapshot: HudSnapshot,
+  connection: HudConnectionState,
+  nowMs: number,
+): AerionVisualState {
+  if (connection === "DISCONNECTED") return "OFF";
+
+  // Safety/attention states outrank a cosmetic completion flare.
+  if (snapshot.primary_state === "ERROR") return "ERROR";
+  if (snapshot.primary_state === "WAITING_FOR_APPROVAL") return "WAITING_FOR_APPROVAL";
+
+  const newestCompletedNs = [...snapshot.active_operations, ...snapshot.agent_activity]
+    .filter((item) => item.status === "completed")
+    .reduce((latest, item) => Math.max(latest, item.updated_at_ns || item.started_at_ns || 0), 0);
+  if (newestCompletedNs > 0) {
+    const ageMs = nowMs - newestCompletedNs / 1_000_000;
+    if (ageMs >= 0 && ageMs <= AERION_COMPLETION_WINDOW_MS) return "COMPLETED";
+  }
+
+  if (snapshot.primary_state === "IDLE") return "STANDBY";
+  return snapshot.primary_state;
+}
+
 export const REACTOR_STYLES: Record<HudPrimaryState, ReactorStyle> = {
   IDLE: { labelKey: "hud.state.idle", tone: "muted", pattern: "solid" },
   LISTENING: { labelKey: "hud.state.listening", tone: "accent", pattern: "double" },

@@ -99,6 +99,7 @@ describe("HudView", () => {
     expect(screen.getByTestId("aerion-zone-center")).toBeTruthy();
     expect(screen.getByTestId("aerion-zone-right")).toBeTruthy();
     expect(screen.getByTestId("hud-reactor").getAttribute("data-state")).toBe("IDLE");
+    expect(screen.getByTestId("hud-reactor").getAttribute("data-visual-state")).toBe("STANDBY");
   });
 
   it("renders a readable status for the primary state, independent of motion", () => {

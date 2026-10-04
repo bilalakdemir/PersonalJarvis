@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   REACTOR_STYLES,
+  aerionVisualState,
   canDecide,
   effectiveConnection,
   liveApprovals,
@@ -186,6 +187,80 @@ describe("visiblePanels (contextual, not permanent clutter)", () => {
       memory: false,
       error: false,
     });
+  });
+});
+
+
+
+describe("aerionVisualState", () => {
+  it("derives OFF and STANDBY without inventing backend states", () => {
+    expect(aerionVisualState(snapshot({ primary_state: "IDLE" }), "DISCONNECTED", 10_000)).toBe("OFF");
+    expect(aerionVisualState(snapshot({ primary_state: "IDLE" }), "CONNECTED", 10_000)).toBe("STANDBY");
+  });
+
+  it("preserves canonical active states", () => {
+    expect(aerionVisualState(snapshot({ primary_state: "LISTENING" }), "CONNECTED", 10_000)).toBe("LISTENING");
+    expect(aerionVisualState(snapshot({ primary_state: "WORKING" }), "CONNECTED", 10_000)).toBe("WORKING");
+    expect(aerionVisualState(snapshot({ primary_state: "SPEAKING" }), "CONNECTED", 10_000)).toBe("SPEAKING");
+  });
+
+  it("shows a bounded completion flare from a real completed activity", () => {
+    const nowMs = 50_000;
+    const completed = {
+      activity_id: "done-1",
+      kind: "mission",
+      label: "Finished",
+      status: "completed" as const,
+      trace_id: "t1",
+      project_id: null,
+      mission_id: "m1",
+      task_id: null,
+      worker_id: "w1",
+      run_id: null,
+      detail: "",
+      started_at_ns: (nowMs - 5_000) * 1_000_000,
+      updated_at_ns: (nowMs - 500) * 1_000_000,
+    };
+
+    expect(
+      aerionVisualState(snapshot({ active_operations: [completed] }), "CONNECTED", nowMs),
+    ).toBe("COMPLETED");
+    expect(
+      aerionVisualState(snapshot({ active_operations: [completed] }), "CONNECTED", nowMs + 2_000),
+    ).toBe("STANDBY");
+  });
+
+  it("does not let a cosmetic completion flare hide approval or error", () => {
+    const nowMs = 50_000;
+    const completed = {
+      activity_id: "done-1",
+      kind: "mission",
+      label: "Finished",
+      status: "completed" as const,
+      trace_id: "t1",
+      project_id: null,
+      mission_id: "m1",
+      task_id: null,
+      worker_id: "w1",
+      run_id: null,
+      detail: "",
+      started_at_ns: nowMs * 1_000_000,
+      updated_at_ns: nowMs * 1_000_000,
+    };
+    expect(
+      aerionVisualState(
+        snapshot({ primary_state: "WAITING_FOR_APPROVAL", active_operations: [completed] }),
+        "CONNECTED",
+        nowMs,
+      ),
+    ).toBe("WAITING_FOR_APPROVAL");
+    expect(
+      aerionVisualState(
+        snapshot({ primary_state: "ERROR", active_operations: [completed] }),
+        "CONNECTED",
+        nowMs,
+      ),
+    ).toBe("ERROR");
   });
 });
 
