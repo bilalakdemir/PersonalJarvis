@@ -141,7 +141,7 @@ class WikiIntegrationHandle:
     )
     _persistent_approval_queue: Any = field(default=None)
     _project_state_approval_lifecycle: Any = field(default=None)
-    _project_state_prepare_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    _project_state_prepare_tasks: dict[int, asyncio.Task[Any]] = field(default_factory=dict)
     # Contact → person-page mirror: detach callback (notify sink + bus
     # subscription) and the boot reconciliation task.
     _contact_mirror_cleanup: Callable[[], None] | None = field(default=None)
@@ -182,14 +182,18 @@ class WikiIntegrationHandle:
         item_id = int(queue_item_id)
         if item_id <= 0:
             return False
+        existing = self._project_state_prepare_tasks.get(item_id)
+        if existing is not None and not existing.done():
+            return True
         task = asyncio.create_task(
             lifecycle.prepare(item_id),
             name=f"memory-project-state-proposal-{item_id}",
         )
-        self._project_state_prepare_tasks.add(task)
+        self._project_state_prepare_tasks[item_id] = task
 
         def _done(done: asyncio.Task[Any]) -> None:
-            self._project_state_prepare_tasks.discard(done)
+            if self._project_state_prepare_tasks.get(item_id) is done:
+                self._project_state_prepare_tasks.pop(item_id, None)
             if done.cancelled():
                 return
             exc = done.exception()
@@ -199,6 +203,33 @@ class WikiIntegrationHandle:
                     item_id,
                     exc,
                 )
+
+        task.add_done_callback(_done)
+        return True
+
+    def schedule_project_state_recovery(self) -> bool:
+        """Replay waiting cards and resume exact approvals after restart."""
+        lifecycle = self._project_state_approval_lifecycle
+        if lifecycle is None:
+            return False
+        recovery_key = 0  # durable queue IDs are strictly positive
+        existing = self._project_state_prepare_tasks.get(recovery_key)
+        if existing is not None and not existing.done():
+            return True
+        task = asyncio.create_task(
+            lifecycle.recover_pending(limit=100),
+            name="memory-project-state-recovery",
+        )
+        self._project_state_prepare_tasks[recovery_key] = task
+
+        def _done(done: asyncio.Task[Any]) -> None:
+            if self._project_state_prepare_tasks.get(recovery_key) is done:
+                self._project_state_prepare_tasks.pop(recovery_key, None)
+            if done.cancelled():
+                return
+            exc = done.exception()
+            if exc is not None:
+                log.warning("wiki_integration: project-state recovery failed: %s", exc)
 
         task.add_done_callback(_done)
         return True
@@ -255,7 +286,9 @@ class WikiIntegrationHandle:
         # tasks before closing the queue/journal they read from.
         if self._project_state_prepare_tasks:
             pending_proposals = {
-                task for task in self._project_state_prepare_tasks if not task.done()
+                task
+                for task in self._project_state_prepare_tasks.values()
+                if not task.done()
             }
             for task in pending_proposals:
                 task.cancel()
@@ -683,8 +716,11 @@ async def bootstrap_wiki_integration(
             handle._persistent_approval_queue = (  # noqa: SLF001
                 persistent_approval_queue
             )
+            replayed = await persistent_approval_queue.replay_pending(limit=100)
             log.info(
-                "wiki_integration: persistent-memory approval queue attached"
+                "wiki_integration: persistent-memory approval queue attached "
+                "(replayed=%d)",
+                replayed,
             )
         except Exception as exc:  # noqa: BLE001
             persistent_approval_queue = None
@@ -728,6 +764,7 @@ async def bootstrap_wiki_integration(
             handle._project_state_approval_lifecycle = project_state_lifecycle  # noqa: SLF001
             for pending_item in await promotion_queue.pending(limit=100):
                 handle.schedule_project_state_proposal(pending_item.id)
+            handle.schedule_project_state_recovery()
             log.info(
                 "wiki_integration: governed project-state approval lifecycle attached"
             )
