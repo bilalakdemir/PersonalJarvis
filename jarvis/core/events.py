@@ -517,6 +517,21 @@ class ActionApprovalRequired(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class ActionConfirmationDeferred(Event):
+    """A conversational tool call awaits the user's next-turn yes/no decision.
+
+    Unlike :class:`ActionApprovalRequired`, this does not arm the out-of-band
+    ApprovalWorkflow. The conversational surface owns the decision, while the
+    event makes the paused action observable to HUD/audit projections.
+    """
+
+    tool_name: str = ""
+    risk_tier: RiskTier = "ask"
+    reason: str = "risk_tier"
+    args_preview: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ActionApproved(Event):
     tool_name: str = ""
     approved_by: str = "auto"  # "auto" | "user" | "whitelist"
