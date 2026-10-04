@@ -4162,7 +4162,7 @@ body {
 }
 
 @keyframes aerion-particles {
-  0%, 100% { opacity: calc(var(--aerion-particle-opacity) * 0.62); }
+  0%, 100% { opacity: 0.22; }
   50% { opacity: var(--aerion-particle-opacity); }
 }
 
