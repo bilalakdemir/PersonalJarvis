@@ -262,6 +262,7 @@ async def attach_project_state_route_queue(
     bus: EventBus,
     db_path: str | Path,
     retention_days: int = DEFAULT_PROMOTION_RETENTION_DAYS,
+    on_enqueued: Callable[[MemoryPromotionQueueItem], Awaitable[None]] | None = None,
 ) -> tuple[
     MemoryPromotionQueue,
     Callable[[], Awaitable[None]],
@@ -275,7 +276,7 @@ async def attach_project_state_route_queue(
     async def _on_route(
         event: ProjectStateMemoryProposalRequested,
     ) -> None:
-        await queue.enqueue_project_state(
+        item = await queue.enqueue_project_state(
             candidate_id=event.candidate_id,
             project_id=event.project_id,
             source_state_revision=event.source_state_revision,
@@ -283,6 +284,8 @@ async def attach_project_state_route_queue(
             relation=event.relation,
             retention_days=retention_days,
         )
+        if on_enqueued is not None:
+            await on_enqueued(item)
 
     bus.subscribe(
         ProjectStateMemoryProposalRequested,
