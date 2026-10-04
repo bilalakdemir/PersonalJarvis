@@ -170,7 +170,11 @@ class WikiIntegrationHandle:
                 name="wiki-governance-decision-trigger",
                 log_context="governed memory decision",
             )
-        except RuntimeError:
+        except RuntimeError as exc:
+            log.debug(
+                "wiki_integration: governed memory resume trigger unavailable: %s",
+                exc,
+            )
             return False
         return True
 
