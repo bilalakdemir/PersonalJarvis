@@ -3892,11 +3892,4 @@ body {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .aerion-command-core *,
-  .aerion-command-core *::before,
-  .aerion-command-core *::after {
-    scroll-behavior: auto !important;
-  }
-}
 
