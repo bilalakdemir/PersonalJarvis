@@ -1,14 +1,6 @@
 /**
- * The HUD's ONLY write path: answering an approval card through the route
- * the owning domain already exposes, for exactly that card's identity.
- *
- * There is no "approve whatever is pending" anywhere in the HUD. A card is
- * decided by `(mission_id, trace_id)` on the mission tool-approval route
- * (`MissionToolApprovalCoordinator`), the same call the mission deck's own
- * approval panel makes. Every other decision channel is read-only here: a
- * chat card is answered in its chat, and governed project-state proposals
- * have no safe route on this build yet (rendered read-only, documented in
- * HANDOFF.json). This module refuses — it never guesses.
+ * The HUD can answer a card only through the owning domain's exact route.
+ * There is no "approve whatever is pending" fallback.
  */
 import { approveMissionToolCall, denyMissionToolCall } from "@/components/missions/api";
 import { canDecide } from "@/lib/hudSemantics";
@@ -23,15 +15,47 @@ export class HudApprovalReadOnlyError extends Error {
   }
 }
 
+async function postGovernanceDecision(url: string): Promise<void> {
+  const response = await fetch(url, { method: "POST" });
+  const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+  if (!response.ok) {
+    const detail = body && typeof body.detail === "string" ? body.detail : `HTTP ${response.status}`;
+    throw new Error(detail);
+  }
+}
+
 export async function decideHudApproval(
   card: HudApproval,
   decision: HudDecision,
 ): Promise<void> {
   if (!canDecide(card)) throw new HudApprovalReadOnlyError(card);
-  const missionId = card.mission_id as string;
-  if (decision === "approve") {
-    await approveMissionToolCall(missionId, card.trace_id);
-  } else {
-    await denyMissionToolCall(missionId, card.trace_id);
+
+  if (card.decision_channel === "mission_tool_api") {
+    const missionId = card.mission_id as string;
+    if (decision === "approve") {
+      await approveMissionToolCall(missionId, card.trace_id);
+    } else {
+      await denyMissionToolCall(missionId, card.trace_id);
+    }
+    return;
   }
+
+  if (card.decision_channel === "project_state_api") {
+    const action = decision === "approve" ? "approve" : "reject";
+    await postGovernanceDecision(
+      `/api/memory/governance/project-state/${encodeURIComponent(String(card.queue_item_id))}/${encodeURIComponent(card.transaction_id as string)}/${encodeURIComponent(card.proposal_digest as string)}/${action}`,
+    );
+    return;
+  }
+
+  if (card.decision_channel === "memory_promotion_api") {
+    const action = decision === "approve" ? "approve" : "reject";
+    await postGovernanceDecision(
+      `/api/memory/governance/persistent/${encodeURIComponent(String(card.candidate_id))}/${encodeURIComponent(card.proposal_digest as string)}/${action}`,
+    );
+    return;
+  }
+
+  // canDecide() is fail-closed, but keep this final guard if channels evolve.
+  throw new HudApprovalReadOnlyError(card);
 }
