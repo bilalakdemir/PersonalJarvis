@@ -6069,6 +6069,7 @@
       "read_only": {
         "no_out_of_band_route": "Diese Anfrage kann nur dort beantwortet werden, wo sie gestellt wurde.",
         "answered_in_chat": "Beantworte diese Anfrage in ihrem Chat.",
+        "answered_in_conversation": "Beantworte diese Anfrage in der Unterhaltung, in der sie gestellt wurde.",
         "project_state_route_unavailable": "Änderungen am Projektstatus können im HUD noch nicht freigegeben werden."
       }
     },
