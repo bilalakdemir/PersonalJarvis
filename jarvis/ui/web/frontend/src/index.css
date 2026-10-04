@@ -5380,11 +5380,6 @@ body {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .aerion-core-target-asset {
-    animation: none !important;
-  }
-}
 
 .aerion-runtime-chip {
   display: grid;
