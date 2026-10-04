@@ -4191,3 +4191,547 @@ body {
   }
 }
 
+/* ==========================================================================
+ * AERION visual fidelity pass — immersive shell matching the approved target.
+ * ========================================================================== */
+.aerion-shell {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: #01070d;
+}
+
+.aerion-shell .jarvis-section-stage {
+  min-height: 0;
+  overflow: hidden;
+  background: #01070d;
+}
+
+.aerion-command-core {
+  --aerion-panel-strong: rgba(2, 16, 27, 0.93);
+  --aerion-panel-soft: rgba(3, 20, 33, 0.78);
+  --aerion-line: rgba(0, 202, 255, 0.38);
+  --aerion-line-strong: rgba(0, 211, 255, 0.72);
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  background:
+    linear-gradient(rgba(0, 207, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 207, 255, 0.045) 1px, transparent 1px),
+    radial-gradient(circle at 50% 42%, rgba(0, 154, 255, 0.18), transparent 31%),
+    radial-gradient(circle at 50% 45%, rgba(255, 174, 67, 0.08), transparent 22%),
+    #01070d;
+  background-size: 34px 34px, 34px 34px, auto, auto, auto;
+}
+
+.aerion-loading {
+  align-items: center;
+  justify-content: center;
+  color: var(--aerion-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.aerion-global-header {
+  position: relative;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto minmax(240px, 1fr);
+  align-items: center;
+  min-height: 66px;
+  gap: 18px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--aerion-line);
+  background: linear-gradient(180deg, rgba(2, 13, 22, 0.98), rgba(1, 8, 14, 0.93));
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+}
+
+.aerion-global-header::after {
+  content: "";
+  position: absolute;
+  inset: auto 18% -1px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--aerion-cyan), transparent);
+  opacity: 0.8;
+}
+
+.aerion-brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.aerion-brand-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  clip-path: polygon(50% 0, 100% 84%, 76% 100%, 50% 58%, 24% 100%, 0 84%);
+  border: 1px solid var(--aerion-cyan);
+  color: var(--aerion-cyan);
+  background: linear-gradient(180deg, rgba(0, 200, 255, 0.18), rgba(0, 77, 116, 0.18));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-weight: 700;
+  filter: drop-shadow(0 0 10px rgba(0, 200, 255, 0.4));
+}
+
+.aerion-brand-subtitle {
+  margin-top: 4px;
+  color: var(--aerion-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 8px;
+  letter-spacing: 0.2em;
+}
+
+.aerion-topnav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.aerion-topnav-button {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  color: #b9d4e2;
+  background: transparent;
+  font-size: 12px;
+  transition: 150ms ease;
+}
+
+.aerion-topnav-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.aerion-topnav-button:hover,
+.aerion-topnav-button:focus-visible {
+  border-color: var(--aerion-line);
+  color: white;
+  background: rgba(0, 200, 255, 0.08);
+  outline: none;
+  box-shadow: 0 0 18px rgba(0, 200, 255, 0.08);
+}
+
+.aerion-header-status {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #9dc8dc;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.aerion-status-divider {
+  opacity: 0.35;
+}
+
+.aerion-dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(270px, 23vw) minmax(520px, 1fr) minmax(280px, 23vw);
+  min-height: 0;
+  flex: 1;
+  gap: 12px;
+  padding: 12px 14px 14px;
+  overflow: hidden;
+}
+
+.aerion-side-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 200, 255, 0.24) transparent;
+}
+
+.aerion-side-column .aerion-hud-panel,
+.aerion-intel-panel {
+  border: 1px solid var(--aerion-line-strong);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(4, 24, 39, 0.94), rgba(2, 12, 21, 0.94));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.015),
+    0 0 22px rgba(0, 173, 255, 0.07);
+}
+
+.aerion-intel-panel {
+  position: relative;
+  padding: 14px 16px;
+}
+
+.aerion-intel-panel::before,
+.aerion-hud-panel::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+}
+
+.aerion-intel-panel::before {
+  inset: 0 auto auto 14px;
+  width: 72px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--aerion-cyan), transparent);
+}
+
+.aerion-intel-panel header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #eaf8ff;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.aerion-intel-panel header svg {
+  width: 18px;
+  height: 18px;
+  color: var(--aerion-cyan);
+}
+
+.aerion-intel-panel p {
+  margin-top: 10px;
+  color: #7399aa;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.aerion-empty-panel {
+  min-height: 92px;
+}
+
+.aerion-center-stage {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.aerion-core-stage {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--aerion-line);
+  border-radius: 16px;
+  background:
+    repeating-conic-gradient(
+      from 0deg at 50% 51%,
+      rgba(0, 196, 255, 0.055) 0deg 1deg,
+      transparent 1deg 10deg
+    ),
+    radial-gradient(circle at 50% 51%, rgba(0, 207, 255, 0.18), transparent 37%),
+    radial-gradient(circle at 50% 51%, rgba(255, 172, 66, 0.08), transparent 26%),
+    rgba(1, 9, 15, 0.76);
+  box-shadow:
+    inset 0 0 60px rgba(0, 149, 255, 0.08),
+    0 0 36px rgba(0, 149, 255, 0.08);
+}
+
+.aerion-core-stage::before {
+  content: "";
+  position: absolute;
+  inset: 7% 12%;
+  border: 1px solid rgba(0, 203, 255, 0.16);
+  border-radius: 50%;
+  background:
+    repeating-radial-gradient(circle at 50% 50%, transparent 0 25px, rgba(0, 203, 255, 0.045) 26px 27px);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.aerion-core-stage::after {
+  content: "";
+  position: absolute;
+  inset: 12% 18%;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(255, 255, 255, 0.12), transparent 17%),
+    conic-gradient(
+      from 45deg,
+      transparent 0 12%,
+      rgba(0, 205, 255, 0.09) 12% 13%,
+      transparent 13% 28%,
+      rgba(255, 177, 70, 0.12) 28% 29%,
+      transparent 29% 100%
+    );
+  filter: blur(0.2px);
+  pointer-events: none;
+}
+
+.aerion-mode-readout {
+  top: 18px;
+  left: 18px;
+  z-index: 8;
+}
+
+.aerion-mode-readout span {
+  color: #87aabd;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9px;
+  letter-spacing: 0.15em;
+}
+
+.aerion-mode-readout strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--aerion-cyan);
+  font-size: clamp(22px, 2vw, 34px);
+  text-shadow: 0 0 16px rgba(0, 200, 255, 0.35);
+}
+
+.aerion-mode-readout small {
+  color: #91afbd;
+  font-size: 10px;
+}
+
+.aerion-system-summary {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 8;
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  color: #abc8d6;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9px;
+}
+
+.aerion-system-summary span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.aerion-system-summary i {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--aerion-emerald);
+  box-shadow: 0 0 10px rgba(38, 230, 163, 0.75);
+}
+
+.aerion-core-caption {
+  position: absolute;
+  z-index: 8;
+  bottom: 14px;
+  left: 50%;
+  display: grid;
+  transform: translateX(-50%);
+  justify-items: center;
+  gap: 3px;
+  padding: 7px 24px;
+  border-top: 1px solid rgba(0, 200, 255, 0.28);
+  border-bottom: 1px solid rgba(0, 200, 255, 0.12);
+  background: linear-gradient(90deg, transparent, rgba(1, 12, 22, 0.84), transparent);
+  white-space: nowrap;
+}
+
+.aerion-core-caption strong {
+  color: var(--aerion-cyan);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+}
+
+.aerion-core-caption span {
+  color: #668fa3;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 8px;
+  letter-spacing: 0.18em;
+}
+
+.aerion-command-dock {
+  min-width: 0;
+}
+
+.aerion-command-input {
+  display: flex;
+  width: 100%;
+  height: 62px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+  border: 1px solid var(--aerion-cyan);
+  border-radius: 28px;
+  color: #91b3c4;
+  background:
+    linear-gradient(180deg, rgba(4, 28, 47, 0.96), rgba(2, 15, 26, 0.98));
+  box-shadow:
+    inset 0 0 22px rgba(0, 200, 255, 0.06),
+    0 0 24px rgba(0, 200, 255, 0.12);
+  text-align: left;
+}
+
+.aerion-command-input > svg {
+  width: 20px;
+  height: 20px;
+  color: var(--aerion-cyan);
+}
+
+.aerion-command-input > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.aerion-command-input .aerion-command-trailing {
+  color: #00d7ff;
+}
+
+.aerion-quick-actions {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-top: 8px;
+}
+
+.aerion-quick-actions button {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 13px;
+  border: 1px solid rgba(0, 200, 255, 0.26);
+  border-radius: 12px;
+  color: #9ec2d2;
+  background: rgba(2, 14, 24, 0.84);
+  font-size: 10px;
+}
+
+.aerion-quick-actions button:hover {
+  border-color: rgba(0, 200, 255, 0.62);
+  color: white;
+}
+
+.aerion-energy-figure {
+  position: absolute;
+  inset: 4% 3% 8%;
+  display: grid;
+  place-items: center;
+}
+
+.aerion-energy-core-visual {
+  width: min(76vh, 92%);
+  max-width: none;
+  filter:
+    drop-shadow(0 0 28px color-mix(in srgb, var(--aerion-core-color) 52%, transparent))
+    drop-shadow(0 0 72px rgba(0, 132, 255, 0.24));
+}
+
+.aerion-energy-svg {
+  overflow: visible;
+}
+
+.aerion-energy-halo {
+  opacity: 1;
+}
+
+.aerion-energy-orbit-a {
+  stroke-width: 3px;
+  filter:
+    drop-shadow(0 0 4px rgba(255, 179, 71, 0.8))
+    drop-shadow(0 0 12px rgba(255, 179, 71, 0.4));
+}
+
+.aerion-energy-orbit-b,
+.aerion-energy-orbit-c {
+  filter: drop-shadow(0 0 7px rgba(0, 200, 255, 0.55));
+}
+
+.aerion-energy-mesh {
+  opacity: 0.78;
+  filter:
+    drop-shadow(0 0 2px currentColor)
+    drop-shadow(0 0 7px rgba(0, 200, 255, 0.34));
+}
+
+.aerion-energy-particles {
+  opacity: 0.82;
+}
+
+.aerion-energy-core-glow {
+  filter:
+    drop-shadow(0 0 12px white)
+    drop-shadow(0 0 26px currentColor)
+    drop-shadow(0 0 54px currentColor);
+}
+
+.aerion-energy-core-node {
+  filter:
+    drop-shadow(0 0 12px white)
+    drop-shadow(0 0 32px #ffd18b)
+    drop-shadow(0 0 64px currentColor);
+}
+
+.aerion-energy-label {
+  position: absolute;
+  bottom: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 0.7;
+  font-size: 10px;
+}
+
+.aerion-energy-figure figcaption > [data-testid="hud-attention"] {
+  position: absolute;
+  bottom: 31px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+@media (max-width: 1250px) {
+  .aerion-global-header {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  .aerion-topnav-button span:last-child {
+    display: none;
+  }
+
+  .aerion-dashboard-grid {
+    grid-template-columns: 235px minmax(450px, 1fr) 245px;
+  }
+}
+
+@media (max-width: 980px) {
+  .aerion-dashboard-grid {
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
+
+  .aerion-side-column {
+    overflow: visible;
+  }
+
+  .aerion-center-stage {
+    order: -1;
+    min-height: 720px;
+  }
+
+  .aerion-left-column,
+  .aerion-right-column {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
