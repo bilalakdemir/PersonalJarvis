@@ -5,6 +5,7 @@
  * it projects canonical state as a dense blue/gold intelligence field without
  * inventing operational data.
  */
+import aerionCoreTarget from "@/assets/aerion-core-target.webp";
 import { REACTOR_STYLES, type AerionVisualState } from "@/lib/hudSemantics";
 import { cn } from "@/lib/utils";
 import type { HudPrimaryState } from "@/types/hud";
@@ -81,7 +82,13 @@ export function Reactor({
       <div className="aerion-energy-core-visual relative" data-visual-state={visualState} aria-hidden>
         <div className="aerion-energy-aura" />
         <div className="aerion-energy-aura aerion-energy-aura-gold" />
-        <svg viewBox="0 0 320 320" className="aerion-energy-svg">
+        <img
+          className="aerion-core-target-asset"
+          src={aerionCoreTarget}
+          alt=""
+          draggable={false}
+        />
+        <svg viewBox="0 0 320 320" className="aerion-energy-svg aerion-energy-svg-overlay">
           <defs>
             <radialGradient id="aerion-core-fill" cx="50%" cy="50%" r="50%">
               <stop offset="0%" stopColor="#fff" stopOpacity="1" />
