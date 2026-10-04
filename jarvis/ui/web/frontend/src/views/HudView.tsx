@@ -19,7 +19,12 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Target,
+  Volume2,
   Wrench,
+  Zap,
+  BookOpen,
+  BrainCircuit,
 } from "lucide-react";
 
 import { Reactor } from "@/components/hud/Reactor";
@@ -157,28 +162,43 @@ export function HudView() {
         <span className="sr-only" data-testid="hud-quiet">{t("hud.quiet")}</span>
       ) : null}
       <header className="aerion-global-header">
-        <div className="aerion-brand-lockup">
-          <div className="aerion-brand-mark" aria-hidden>A</div>
-          <div>
-            <div className="aerion-wordmark" data-testid="aerion-wordmark">AERION</div>
-            <div className="aerion-brand-subtitle">PERSONAL INTELLIGENCE SYSTEM</div>
+        <div className="aerion-header-left">
+          <div className="aerion-brand-lockup">
+            <div className="aerion-brand-mark" aria-hidden>A</div>
+            <div>
+              <div className="aerion-wordmark" data-testid="aerion-wordmark">AERION</div>
+              <div className="aerion-brand-subtitle">PERSONAL INTELLIGENCE SYSTEM</div>
+            </div>
           </div>
+
+          <nav className="aerion-topnav" aria-label="AERION">
+            <NavButton icon={<MessageCircle />} label="Chat" section="chats" onSelect={setActiveSection} />
+            <NavButton icon={<FolderKanban />} label="Projects" section="chat-workspace" onSelect={setActiveSection} />
+            <NavButton icon={<Bot />} label="Agents" section="agents" onSelect={setActiveSection} />
+            <NavButton icon={<Brain />} label="Memory" section="memory" onSelect={setActiveSection} />
+            <NavButton icon={<Wrench />} label="Tools" section="plugins" onSelect={setActiveSection} />
+          </nav>
         </div>
 
-        <nav className="aerion-topnav" aria-label="AERION">
-          <NavButton icon={<MessageCircle />} label="Chat" section="chats" onSelect={setActiveSection} />
-          <NavButton icon={<FolderKanban />} label="Projects" section="chat-workspace" onSelect={setActiveSection} />
-          <NavButton icon={<Bot />} label="Agents" section="agents" onSelect={setActiveSection} />
-          <NavButton icon={<Brain />} label="Memory" section="memory" onSelect={setActiveSection} />
-          <NavButton icon={<Wrench />} label="Tools" section="plugins" onSelect={setActiveSection} />
-          <NavButton icon={<Settings />} label="System" section="settings" onSelect={setActiveSection} />
-        </nav>
+        <div className="aerion-header-core">
+          <span>AERION CORE</span>
+          <strong>AERION</strong>
+          <small>PERSONAL INTELLIGENCE SYSTEM</small>
+        </div>
 
-        <div className="aerion-header-status" data-testid="hud-status-line">
-          <span className="aerion-status-dot" aria-hidden />
-          <span>{coreStateLabel}</span>
-          <span className="aerion-status-divider">·</span>
-          <span>{t(`hud.connection.${connection.toLowerCase()}`)}</span>
+        <div className="aerion-header-right">
+          <div className="aerion-status-pill">
+            <span className="aerion-status-dot" aria-hidden />
+            <span>{connection === "CONNECTED" ? "ONLINE" : connection}</span>
+          </div>
+          <div className="aerion-header-status" data-testid="hud-status-line">
+            <span>{coreStateLabel}</span>
+            <span className="aerion-status-divider">·</span>
+            <span>{t(`hud.connection.${connection.toLowerCase()}`)}</span>
+          </div>
+          <button type="button" className="aerion-system-button" onClick={() => setActiveSection("settings")} aria-label="System">
+            <Settings aria-hidden />
+          </button>
         </div>
       </header>
 
@@ -223,6 +243,17 @@ export function HudView() {
               <span><i /> Core runtime</span>
               <span><i /> Event stream</span>
               <span><i /> Memory layer</span>
+            </div>
+
+            <div className="aerion-core-capabilities aerion-core-capabilities-left" aria-hidden>
+              <div><Volume2 /><span>LISTEN</span></div>
+              <div><BrainCircuit /><span>THINK</span></div>
+              <div><Zap /><span>PROCESS</span></div>
+            </div>
+            <div className="aerion-core-capabilities aerion-core-capabilities-right" aria-hidden>
+              <div><BookOpen /><span>LEARN</span></div>
+              <div><Target /><span>PLAN</span></div>
+              <div><Send /><span>EXECUTE</span></div>
             </div>
 
             <Reactor
