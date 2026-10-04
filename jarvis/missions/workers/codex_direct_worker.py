@@ -810,14 +810,12 @@ class CodexDirectWorker:
                     if not tool_succeeded:
                         # Codex may put the only useful Windows sandbox error in
                         # the failed JSON item and still finish the turn with
-                        # exit code 0. Preserve bounded text for post-run
-                        # classification instead of silently discarding it.
-                        try:
-                            failed_tool_texts.append(
-                                json.dumps(item, ensure_ascii=False, default=str)[:4000]
-                            )
-                        except (TypeError, ValueError):
-                            failed_tool_texts.append(str(item)[:4000])
+                        # exit code 0. The item came from json.loads above, so
+                        # it is JSON-serializable; preserve a bounded copy for
+                        # post-run classification instead of discarding it.
+                        failed_tool_texts.append(
+                            json.dumps(item, ensure_ascii=False)[:4000]
+                        )
                         continue
                     any_tool_use = True
                     # Synthesize a tool_use Claude-style event so the
