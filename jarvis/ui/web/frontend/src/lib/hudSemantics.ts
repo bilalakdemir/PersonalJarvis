@@ -95,13 +95,33 @@ export function liveApprovals(snapshot: HudSnapshot, nowMs: number): HudApproval
  * existing route, and only with the exact identity that route needs.
  */
 export function canDecide(card: HudApproval): boolean {
-  return (
-    card.decision_channel === "mission_tool_api" &&
-    typeof card.mission_id === "string" &&
-    card.mission_id.length > 0 &&
-    typeof card.trace_id === "string" &&
-    card.trace_id.length > 0
-  );
+  if (card.decision_channel === "mission_tool_api") {
+    return (
+      typeof card.mission_id === "string" &&
+      card.mission_id.length > 0 &&
+      typeof card.trace_id === "string" &&
+      card.trace_id.length > 0
+    );
+  }
+  if (card.decision_channel === "project_state_api") {
+    return (
+      typeof card.queue_item_id === "number" &&
+      card.queue_item_id > 0 &&
+      typeof card.transaction_id === "string" &&
+      card.transaction_id.length > 0 &&
+      typeof card.proposal_digest === "string" &&
+      card.proposal_digest.length > 0
+    );
+  }
+  if (card.decision_channel === "memory_promotion_api") {
+    return (
+      typeof card.candidate_id === "number" &&
+      card.candidate_id > 0 &&
+      typeof card.proposal_digest === "string" &&
+      card.proposal_digest.length > 0
+    );
+  }
+  return false;
 }
 
 export interface HudPanels {
