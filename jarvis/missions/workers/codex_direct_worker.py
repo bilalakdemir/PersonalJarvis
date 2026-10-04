@@ -99,12 +99,17 @@ _MISSION_REASONING_EFFORT: str = "medium"
 # confines shell writes to the worktree through Windows ACLs.
 _WINDOWS_SANDBOX_MODE: str = "unelevated"
 _WINDOWS_WRITE_GUIDANCE: str = (
-    "Native Windows execution note: if the patch or file-change tool reports "
-    "that the workspace is read-only, use a PowerShell shell command to write "
-    "inside the current working directory instead. Write text as UTF-8 without "
-    "a byte-order mark; Windows PowerShell's Set-Content can add one, so prefer "
-    "System.IO.File.WriteAllText with System.Text.UTF8Encoding(false). Never "
-    "write outside the current worktree."
+    "Native Windows execution rule: the assigned worktree is intended to be "
+    "writable. If a patch, file-change, or direct write tool reports read-only, "
+    "blocked, access denied, or a similar write rejection inside the worktree, "
+    "DO NOT stop or report that the task cannot be completed. You MUST retry "
+    "the same write through a PowerShell shell command in the current working "
+    "directory, then verify the intended file exists (and read it back when "
+    "practical). For text, write UTF-8 without a byte-order mark; Windows "
+    "PowerShell's Set-Content can add one, so prefer "
+    "System.IO.File.WriteAllText with System.Text.UTF8Encoding(false). Only "
+    "report a write failure after that PowerShell recovery command itself "
+    "fails. Never write outside the current worktree."
 )
 
 
@@ -340,16 +345,31 @@ def _prepare_codex_prompt(
     return f"{_WINDOWS_WRITE_GUIDANCE}\n\n{prompt}"
 
 
-def _codex_sandbox_write_rejected(stderr_text: str) -> bool:
-    """Return whether Codex reported a rejected workspace write."""
-    low = stderr_text.lower()
-    return any(
-        marker in low
-        for marker in (
-            "patch rejected: writing is blocked by read-only sandbox",
-            "failed to write file",
-        )
-    )
+_CODEX_WRITE_REJECTION_MARKERS: tuple[str, ...] = (
+    "patch rejected: writing is blocked by read-only sandbox",
+    "writing is blocked by read-only sandbox",
+    "workspace is read-only",
+    "workspace is read only",
+    "read-only workspace",
+    "read only workspace",
+    "failed to write file",
+    "access is denied",
+    "access denied",
+    "unauthorizedaccessexception",
+    "permission denied",
+)
+
+
+def _codex_sandbox_write_rejected(*evidence: str) -> bool:
+    """Return whether Codex reported a rejected workspace write.
+
+    Codex 0.160 on native Windows can surface an effective read-only workspace
+    as an ordinary agent message or failed tool item while still exiting zero.
+    Do not rely on stderr alone: automation must classify the model-visible
+    rejection as a failed side effect unless a later tool succeeds.
+    """
+    low = "\n".join(part for part in evidence if part).lower()
+    return any(marker in low for marker in _CODEX_WRITE_REJECTION_MARKERS)
 
 
 # Markers in a codex ``turn.failed`` / ``error`` event that mean the ChatGPT
@@ -688,6 +708,7 @@ class CodexDirectWorker:
         timeout_message = ""
         stderr_bytes = b""
         text_acc: list[str] = []
+        failed_tool_texts: list[str] = []
         any_tool_use = False
         terminal_kind: str = "success"
         terminal_message: str | None = None
@@ -787,6 +808,16 @@ class CodexDirectWorker:
                         item_type != "command_execution" or exit_code in (None, 0)
                     )
                     if not tool_succeeded:
+                        # Codex may put the only useful Windows sandbox error in
+                        # the failed JSON item and still finish the turn with
+                        # exit code 0. Preserve bounded text for post-run
+                        # classification instead of silently discarding it.
+                        try:
+                            failed_tool_texts.append(
+                                json.dumps(item, ensure_ascii=False, default=str)[:4000]
+                            )
+                        except (TypeError, ValueError):
+                            failed_tool_texts.append(str(item)[:4000])
                         continue
                     any_tool_use = True
                     # Synthesize a tool_use Claude-style event so the
@@ -860,12 +891,17 @@ class CodexDirectWorker:
         if (
             terminal_kind == "success"
             and not any_tool_use
-            and _codex_sandbox_write_rejected(stderr_text)
+            and _codex_sandbox_write_rejected(
+                stderr_text,
+                *text_acc,
+                *failed_tool_texts,
+            )
         ):
             terminal_kind = "error"
             terminal_message = (
                 "Codex could not write to the mission worktree because its "
-                "sandbox rejected the file operation."
+                "Windows sandbox rejected the file operation after the bounded "
+                "write-recovery path was available."
             )
 
         wall_ms = int((time.perf_counter() - t0) * 1000)
