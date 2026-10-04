@@ -52,7 +52,7 @@ export function HudPanel({
   return (
     <section
       className={cn(
-        "rounded-lg border bg-card/80 p-4 shadow-sm backdrop-blur-sm",
+        "aerion-hud-panel rounded-lg border bg-card/80 p-4 shadow-sm backdrop-blur-sm",
         tone === "warning" && "border-warning/60",
         tone === "destructive" && "border-destructive/60",
         !tone && "border-border",
@@ -105,7 +105,7 @@ export function ApprovalCard({ card, t, nowMs }: { card: HudApproval; t: T; nowM
 
   return (
     <article
-      className="rounded-md border border-border bg-background/60 p-3"
+      className="aerion-hud-card rounded-md border border-border bg-background/60 p-3"
       data-testid="hud-approval-card"
       data-approval-id={card.approval_id}
     >
