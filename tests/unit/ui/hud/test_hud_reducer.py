@@ -789,7 +789,8 @@ def test_governed_memory_lifecycle_projects_metadata_and_exact_approval() -> Non
     }
     card = next(c for c in before.approval_requests if c.candidate_id == 7)
     assert card.kind == "memory_promotion"
-    assert card.decision_channel == "none"
+    assert card.decision_channel == "memory_promotion_api"
+    assert card.read_only_reason == ""
     assert card.proposal_digest == "digest-7"
 
     r.apply(
@@ -933,7 +934,8 @@ def test_durable_proposal_and_engine_request_share_one_exact_card() -> None:
     card = cards[0]
     assert card.approval_id == "project_state:p1:tx-1:d-1"
     assert (card.queue_item_id, card.candidate_id) == (7, 70)
-    assert card.decision_channel == "none"
+    assert card.decision_channel == "project_state_api"
+    assert card.read_only_reason == ""
 
 
 def test_durable_decision_closes_exactly_its_proposal() -> None:
