@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 import {
   REACTOR_STYLES,
+  aerionVisualState,
   effectiveConnection,
   liveApprovals,
   visiblePanels,
@@ -93,6 +94,8 @@ export function HudView() {
     tr(t, `hud.attention.${flag}`, flag),
   );
   const quiet = !Object.values(panels).some(Boolean);
+  const coreState = aerionVisualState(snapshot, connection, nowMs);
+  const coreStateLabel = coreState.replaceAll("_", " ");
 
   return (
     <div
@@ -100,6 +103,7 @@ export function HudView() {
       data-testid="hud-view"
       data-primary-state={snapshot.primary_state}
       data-connection-state={connection}
+      data-aerion-state={coreState}
     >
       <header className="aerion-command-header">
         <div className="min-w-0">
@@ -151,11 +155,16 @@ export function HudView() {
           <div className="aerion-core-stage">
             <div className="aerion-mode-readout">
               <span className="aerion-mode-caption">CURRENT MODE</span>
-              <strong>{stateLabel}</strong>
+              <strong>{coreStateLabel}</strong>
               <span>{t(`hud.connection.${connection.toLowerCase()}`)}</span>
             </div>
 
-            <Reactor state={snapshot.primary_state} label={stateLabel} attention={attention} />
+            <Reactor
+              state={snapshot.primary_state}
+              label={stateLabel}
+              attention={attention}
+              visualState={coreState}
+            />
 
             {quiet ? (
               <p className="aerion-quiet" data-testid="hud-quiet">
