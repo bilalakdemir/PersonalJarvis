@@ -120,21 +120,37 @@ describe("effectiveConnection", () => {
 });
 
 describe("approvals", () => {
-  it("only a mission card with its exact identity can be decided here", () => {
+  it("requires the exact identity owned by each writable decision channel", () => {
     expect(canDecide(approval())).toBe(true);
     expect(canDecide(approval({ mission_id: null }))).toBe(false);
     expect(canDecide(approval({ trace_id: "" }))).toBe(false);
+
+    const project = approval({
+      kind: "project_state",
+      decision_channel: "project_state_api",
+      mission_id: null,
+      queue_item_id: 13,
+      transaction_id: "tx",
+      proposal_digest: "digest",
+    });
+    expect(canDecide(project)).toBe(true);
+    expect(canDecide({ ...project, queue_item_id: null })).toBe(false);
+    expect(canDecide({ ...project, transaction_id: null })).toBe(false);
+    expect(canDecide({ ...project, proposal_digest: null })).toBe(false);
+
+    const memory = approval({
+      kind: "memory_promotion",
+      decision_channel: "memory_promotion_api",
+      mission_id: null,
+      candidate_id: 17,
+      proposal_digest: "digest",
+    });
+    expect(canDecide(memory)).toBe(true);
+    expect(canDecide({ ...memory, candidate_id: null })).toBe(false);
+    expect(canDecide({ ...memory, proposal_digest: "" })).toBe(false);
+
     expect(canDecide(approval({ decision_channel: "chat_card" }))).toBe(false);
-    expect(
-      canDecide(
-        approval({
-          kind: "project_state",
-          decision_channel: "none",
-          transaction_id: "tx",
-          proposal_digest: "d",
-        }),
-      ),
-    ).toBe(false);
+    expect(canDecide(approval({ decision_channel: "none" }))).toBe(false);
   });
 
   it("hides cards whose advertised window has closed", () => {
