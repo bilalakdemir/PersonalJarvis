@@ -63,6 +63,17 @@ export function Reactor({
             </clipPath>
           </defs>
 
+          <g className="aerion-tech-rings">
+            <circle cx="160" cy="160" r="145" fill="none" stroke="currentColor" strokeWidth="0.8" strokeDasharray="3 7 22 9" />
+            <circle cx="160" cy="160" r="136" fill="none" stroke="currentColor" strokeWidth="0.55" strokeDasharray="1 5" />
+            <circle cx="160" cy="160" r="111" fill="none" stroke="currentColor" strokeWidth="0.7" strokeDasharray="18 5 3 8" />
+          </g>
+
+          <g className="aerion-energy-rays">
+            <path d="M160 5 L160 45 M160 275 L160 315 M5 160 L45 160 M275 160 L315 160" />
+            <path d="M51 51 L80 80 M240 240 L269 269 M269 51 L240 80 M80 240 L51 269" />
+          </g>
+
           <circle className="aerion-energy-halo" cx="160" cy="160" r="126" fill="url(#aerion-halo-fill)" />
 
           <g className="aerion-energy-particles">
@@ -81,6 +92,12 @@ export function Reactor({
           </g>
           <g className="aerion-energy-orbit aerion-energy-orbit-c">
             <ellipse cx="160" cy="160" rx="112" ry="42" fill="none" stroke="currentColor" strokeWidth="1.2" />
+          </g>
+          <g className="aerion-energy-orbit aerion-energy-orbit-d">
+            <ellipse cx="160" cy="160" rx="126" ry="36" fill="none" stroke="currentColor" strokeWidth="1.1" />
+          </g>
+          <g className="aerion-energy-orbit aerion-energy-orbit-e">
+            <ellipse cx="160" cy="160" rx="104" ry="61" fill="none" stroke="currentColor" strokeWidth="0.9" />
           </g>
 
           <g clipPath="url(#aerion-sphere-clip)" className="aerion-energy-mesh">
