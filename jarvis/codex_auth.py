@@ -587,8 +587,13 @@ class _GuardedCodexLoginProcess:
         release: Path,
         release_parent_lock: Callable[[], None],
         *,
-        timeout_s: float = 8.0,
+        timeout_s: float = 30.0,
     ) -> None:
+        # Match the guardian's own 30 s coordination budget. Under a loaded
+        # host the guardian can publish "waiting" promptly, then be descheduled
+        # during the critical parent-lock -> guardian-lock transfer. Giving the
+        # parent a shorter default budget makes it abandon a handoff the
+        # guardian still considers valid.
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             status = cls._read_status(acknowledgement)

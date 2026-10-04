@@ -1030,9 +1030,14 @@ function CodexConnectionCard({
 } & RowDisclosure) {
   const pushToast = useEventStore((s) => s.pushToast);
   const [pending, setPending] = useState(false);
-  const { activating, activate, clickActivates } = useSubagentActivate(row, onChanged);
   const connected = Boolean(status?.connected);
   const installed = status?.installed ?? false;
+  const selectable = connected || (installed && Boolean(row?.api_key_set));
+  const { activating, activate, clickActivates } = useSubagentActivate(
+    row,
+    onChanged,
+    selectable,
+  );
   const isActive = Boolean(row?.is_active_brain);
   const email =
     status?.user_email ??
@@ -1077,7 +1082,6 @@ function CodexConnectionCard({
     }
   }
 
-  const selectable = connected || (installed && Boolean(row?.api_key_set));
   return (
     <AgentRow
       testId="agent-row-openai-codex"
@@ -1114,6 +1118,7 @@ function CodexConnectionCard({
               row={row}
               activating={activating}
               onActivate={activate}
+              ready={selectable}
             />
           )}
         </>
@@ -1577,14 +1582,16 @@ function ClaudeApiCard({
 function useSubagentActivate(
   row: SubagentMappingRow | undefined,
   onSwitched: () => void | Promise<void>,
+  readyOverride?: boolean,
 ) {
   const [activating, setActivating] = useState(false);
   const pushToast = useEventStore((s) => s.pushToast);
+  const ready = readyOverride ?? Boolean(row?.key_set);
 
   const activate = useCallback(async () => {
     if (!row || row.is_active_brain || activating) return;
     const label = PROVIDER_LABELS[row.jarvis] ?? row.jarvis;
-    if (!row.key_set) {
+    if (!ready) {
       pushToast(
         "warning",
         row.jarvis === "openai-codex"
@@ -1617,13 +1624,13 @@ function useSubagentActivate(
     } finally {
       setActivating(false);
     }
-  }, [row, activating, pushToast, onSwitched]);
+  }, [row, ready, activating, pushToast, onSwitched]);
 
-  // Whether a click on the row may switch SILENTLY: a row without its key
-  // would only answer with the "save a key first" warning above, and the
-  // click that opened it was there to add that key. The active row and an
-  // in-flight switch are excluded too.
-  const clickActivates = Boolean(row?.key_set) && !row?.is_active_brain && !activating;
+  // Whether a click on the row may switch SILENTLY: a row without usable
+  // access would only answer with the setup warning above. Subscription-backed
+  // rows may override readiness from their live CLI/OAuth status because the
+  // bridge mapping can lag that separate auth probe.
+  const clickActivates = ready && !row?.is_active_brain && !activating;
 
   return { activating, activate, clickActivates };
 }
@@ -1740,6 +1747,7 @@ function SubagentActiveControl({
   activating,
   onActivate,
   active,
+  ready,
 }: {
   row: SubagentMappingRow;
   activating: boolean;
@@ -1752,12 +1760,15 @@ function SubagentActiveControl({
    * rows omit it and fall back to the row flag.
    */
   active?: boolean;
+  /** Live readiness override for subscription-backed CLI/OAuth rows. */
+  ready?: boolean;
 }) {
   const brand = useAgentBrand();
   const isActive = active ?? row.is_active_brain;
+  const isReady = ready ?? row.key_set;
   const labelTitle = isActive
     ? `This ${brand} provider is active`
-    : row.key_set
+    : isReady
       ? `Click to make this the ${brand} provider`
       : "Set an API key first";
 
@@ -1769,7 +1780,7 @@ function SubagentActiveControl({
         "inline-flex h-7 shrink-0 cursor-pointer select-none items-center gap-2 whitespace-nowrap rounded-control px-2.5 text-xs transition-colors focus-within:ring-2 focus-within:ring-ring",
         isActive
           ? "font-medium text-foreground"
-          : row.key_set
+          : isReady
             ? "border border-border bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground"
             : "border border-dashed border-border text-muted-foreground hover:text-foreground",
       )}

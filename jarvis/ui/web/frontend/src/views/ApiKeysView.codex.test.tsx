@@ -249,6 +249,37 @@ describe("ApiKeysView - Codex is subagent-only", () => {
     expect(calls.some((c) => c.url.startsWith("/api/brain/switch"))).toBe(false);
   });
 
+  it("activates connected Codex even when the bridge key flag is stale", async () => {
+    const provider = codexDescriptor();
+    const routes = routesFor(provider);
+    routes["/api/jarvis-agent/status"] = () => ({
+      body: {
+        ...JARVIS_AGENT_CODEX,
+        mapping: JARVIS_AGENT_CODEX.mapping.map((row) => ({
+          ...row,
+          key_set: false,
+        })),
+      },
+    });
+    const { calls } = installFetchMock(routes);
+    render(<ApiKeysView />);
+    fireEvent.click(screen.getByRole("tab", { name: /-agents$/i }));
+
+    const radio = await waitFor(() => screen.getByRole("radio"));
+    fireEvent.click(radio);
+
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.url.startsWith("/api/jarvis-agent/switch") &&
+            call.method === "POST" &&
+            (call.body as { provider?: string })?.provider === "openai-codex",
+        ),
+      ).toBe(true),
+    );
+  });
+
   it("shows the Connect button while not logged in and starts login", async () => {
     const { calls } = installFetchMock(routesFor(codexDescriptorNotConnected()));
     render(<ApiKeysView />);
