@@ -685,14 +685,19 @@ jobs:
             tests/unit/platform/test_permissions.py \
             tests/unit/safety/test_tool_executor_capabilities.py \
             tests/unit/safety/test_tool_executor_decision_log.py \
+            tests/unit/safety/test_tool_executor_voice_confirm.py \
             tests/integration/test_capability_coupling_e2e.py \
             tests/unit/memory/test_governance.py \
             tests/unit/memory/test_retention.py \
+            tests/unit/memory/test_persistent_approval.py \
+            tests/unit/memory/test_promotion_queue.py \
             tests/unit/memory/test_project_state_proposal.py \
             tests/unit/memory/test_project_state_planner.py \
             tests/unit/memory/test_project_state_approval.py \
             tests/unit/ui/hud/test_hud_adapter.py \
             tests/unit/ui/hud/test_hud_reducer.py \
+            tests/unit/ui/hud/test_hud_wire_parity.py \
+            tests/unit/ui/web/test_memory_governance_routes.py \
             tests/integration/test_hud_transport.py \
             tests/unit/brain/test_explicit_computer_use_routing.py \
             tests/integration/test_realtime_delegate_mission_path.py \
