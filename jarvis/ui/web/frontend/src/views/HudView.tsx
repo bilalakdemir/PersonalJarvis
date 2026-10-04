@@ -95,15 +95,29 @@ export function HudView() {
   const quiet = !Object.values(panels).some(Boolean);
 
   return (
-    <div className="hud-workspace h-full overflow-y-auto p-4 sm:p-6" data-testid="hud-view">
-      <header className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold text-foreground">{t("hud.title")}</h1>
+    <div
+      className="aerion-command-core hud-workspace h-full overflow-y-auto"
+      data-testid="hud-view"
+      data-primary-state={snapshot.primary_state}
+      data-connection-state={connection}
+    >
+      <header className="aerion-command-header">
+        <div className="min-w-0">
+          <p className="aerion-eyebrow">PERSONAL INTELLIGENCE SYSTEM</p>
+          <div className="flex items-baseline gap-3">
+            <h1 className="aerion-wordmark" data-testid="aerion-wordmark">
+              AERION
+            </h1>
+            <span className="aerion-command-label">COMMAND CORE</span>
+          </div>
+        </div>
         <p
-          className="text-sm text-muted-foreground"
+          className="aerion-status-line"
           role="status"
           aria-live="polite"
           data-testid="hud-status-line"
         >
+          <span className="aerion-status-dot" aria-hidden />
           {stateLabel}
           {" · "}
           {t(`hud.connection.${connection.toLowerCase()}`)}
@@ -113,27 +127,43 @@ export function HudView() {
         </p>
       </header>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)]">
-        <div className="space-y-4">
-          {panels.project && snapshot.active_project ? (
-            <ProjectPanel project={snapshot.active_project} t={t} />
-          ) : null}
-          {panels.activity ? (
-            <ActivityPanel
-              operations={snapshot.active_operations}
-              agents={snapshot.agent_activity}
-              t={t}
-            />
-          ) : null}
-        </div>
+      <div className="aerion-command-grid" data-testid="aerion-command-grid">
+        <aside className="aerion-zone aerion-zone-left" data-testid="aerion-zone-left">
+          <div className="aerion-zone-heading">
+            <span>PRIORITY INTELLIGENCE</span>
+            <span aria-hidden>01</span>
+          </div>
+          <div className="space-y-4">
+            {panels.project && snapshot.active_project ? (
+              <ProjectPanel project={snapshot.active_project} t={t} />
+            ) : null}
+            {panels.activity ? (
+              <ActivityPanel
+                operations={snapshot.active_operations}
+                agents={snapshot.agent_activity}
+                t={t}
+              />
+            ) : null}
+          </div>
+        </aside>
 
-        <div className="flex flex-col items-center gap-4">
-          <Reactor state={snapshot.primary_state} label={stateLabel} attention={attention} />
-          {quiet ? (
-            <p className="text-sm text-muted-foreground" data-testid="hud-quiet">
-              {t("hud.quiet")}
-            </p>
-          ) : null}
+        <main className="aerion-zone aerion-zone-center" data-testid="aerion-zone-center">
+          <div className="aerion-core-stage">
+            <div className="aerion-mode-readout">
+              <span className="aerion-mode-caption">CURRENT MODE</span>
+              <strong>{stateLabel}</strong>
+              <span>{t(`hud.connection.${connection.toLowerCase()}`)}</span>
+            </div>
+
+            <Reactor state={snapshot.primary_state} label={stateLabel} attention={attention} />
+
+            {quiet ? (
+              <p className="aerion-quiet" data-testid="hud-quiet">
+                {t("hud.quiet")}
+              </p>
+            ) : null}
+          </div>
+
           <HudPanel
             title={t("hud.panel.conversation")}
             icon={<MessageSquare />}
@@ -162,16 +192,24 @@ export function HudView() {
               {t("hud.conversation.open")}
             </Button>
           </HudPanel>
-        </div>
+        </main>
 
-        <div className="space-y-4">
-          {panels.approvals ? <ApprovalsPanel cards={approvals} t={t} nowMs={nowMs} /> : null}
-          {panels.error && snapshot.last_error ? (
-            <ErrorPanel error={snapshot.last_error} t={t} />
-          ) : null}
-          {panels.computer ? <ComputerPanel computer={snapshot.computer_activity} t={t} /> : null}
-          {panels.memory ? <MemoryPanel items={snapshot.memory_activity} t={t} /> : null}
-        </div>
+        <aside className="aerion-zone aerion-zone-right" data-testid="aerion-zone-right">
+          <div className="aerion-zone-heading">
+            <span>OPERATIONAL INTELLIGENCE</span>
+            <span aria-hidden>02</span>
+          </div>
+          <div className="space-y-4">
+            {panels.approvals ? <ApprovalsPanel cards={approvals} t={t} nowMs={nowMs} /> : null}
+            {panels.error && snapshot.last_error ? (
+              <ErrorPanel error={snapshot.last_error} t={t} />
+            ) : null}
+            {panels.computer ? (
+              <ComputerPanel computer={snapshot.computer_activity} t={t} />
+            ) : null}
+            {panels.memory ? <MemoryPanel items={snapshot.memory_activity} t={t} /> : null}
+          </div>
+        </aside>
       </div>
     </div>
   );

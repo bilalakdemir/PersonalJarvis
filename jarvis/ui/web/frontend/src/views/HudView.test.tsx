@@ -89,6 +89,18 @@ afterEach(() => {
 });
 
 describe("HudView", () => {
+  it("renders the approved AERION command-core shell without changing HUD semantics", () => {
+    useHudStore.getState().applySnapshot(snapshot({ primary_state: "IDLE" }));
+    render(<HudView />);
+
+    expect(screen.getByTestId("aerion-wordmark").textContent).toBe("AERION");
+    expect(screen.getByTestId("aerion-command-grid")).toBeTruthy();
+    expect(screen.getByTestId("aerion-zone-left")).toBeTruthy();
+    expect(screen.getByTestId("aerion-zone-center")).toBeTruthy();
+    expect(screen.getByTestId("aerion-zone-right")).toBeTruthy();
+    expect(screen.getByTestId("hud-reactor").getAttribute("data-state")).toBe("IDLE");
+  });
+
   it("renders a readable status for the primary state, independent of motion", () => {
     useHudStore.getState().applySnapshot(snapshot({ primary_state: "WORKING" }));
     render(<HudView />);
