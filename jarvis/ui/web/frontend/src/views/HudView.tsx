@@ -140,6 +140,7 @@ export function HudView() {
   );
   const coreState = aerionVisualState(snapshot, connection, nowMs);
   const coreStateLabel = coreState.replaceAll("_", " ");
+  const quiet = !Object.values(panels).some(Boolean);
   const activeOps = [...snapshot.agent_activity, ...snapshot.active_operations];
   const runningCount = activeOps.filter((item) => item.status === "running").length;
   const agentCount = snapshot.agent_activity.length;
@@ -152,6 +153,9 @@ export function HudView() {
       data-connection-state={connection}
       data-aerion-state={coreState}
     >
+      {quiet ? (
+        <span className="sr-only" data-testid="hud-quiet">{t("hud.quiet")}</span>
+      ) : null}
       <header className="aerion-global-header">
         <div className="aerion-brand-lockup">
           <div className="aerion-brand-mark" aria-hidden>A</div>
