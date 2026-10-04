@@ -4735,3 +4735,49 @@ body {
   }
 }
 
+.aerion-tech-rings,
+.aerion-energy-rays {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.aerion-tech-rings {
+  opacity: 0.34;
+  animation: aerion-tech-spin 44s linear infinite;
+}
+
+.aerion-energy-rays {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 0.8;
+  opacity: 0.2;
+  filter: drop-shadow(0 0 5px currentColor);
+}
+
+.aerion-energy-orbit-d {
+  color: #9fe8ff;
+  opacity: 0.5;
+  animation: aerion-orbit-d 15s linear infinite;
+}
+
+.aerion-energy-orbit-e {
+  color: var(--aerion-gold);
+  opacity: 0.45;
+  animation: aerion-orbit-e 19s linear infinite;
+}
+
+@keyframes aerion-tech-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes aerion-orbit-d {
+  from { transform: rotate(104deg); }
+  to { transform: rotate(464deg); }
+}
+
+@keyframes aerion-orbit-e {
+  from { transform: rotate(-116deg); }
+  to { transform: rotate(-476deg); }
+}
+
