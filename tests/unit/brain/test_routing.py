@@ -1822,6 +1822,41 @@ async def test_heavy_build_still_can_force_spawn() -> None:
     assert user_utterance == "Bau eine Landingpage"
 
 
+@pytest.mark.asyncio
+async def test_explicit_background_agent_beats_local_action_fast_path() -> None:
+    """The requested background vehicle must win over an embedded local action."""
+    manager, executor = _manager_with_local_actions(force_spawn_mode="strict")
+
+    def _provider_should_not_run(*_: Any, **__: Any) -> Any:
+        raise AssertionError("explicit background request must dispatch before provider use")
+
+    manager._get_brain = _provider_should_not_run  # type: ignore[method-assign]
+
+    utterance = "Start a background agent and open Spotify."
+    result = await manager.generate(utterance)
+
+    assert result == "ok"
+    assert len(executor.calls) == 1
+    tool, args, user_utterance = executor.calls[0]
+    assert tool.name == "spawn_worker"
+    assert args["utterance"] == utterance
+    assert user_utterance == utterance
+
+
+def test_background_agent_file_smoke_request_is_explicit_force_spawn() -> None:
+    """Acceptance shape: a tiny file is still delegated when the user says so."""
+    manager, _executor = _manager_with_spawn(force_spawn_mode="strict")
+    utterance = (
+        "Start a background agent and create a Markdown file named "
+        "jarvis-smoke-test.md. The file must contain one one-sentence "
+        "introduction and a three-item checklist. Use only local file creation. "
+        "Do not use web access, external services, or any action requiring approval."
+    )
+
+    assert manager._is_explicit_heavy_request(utterance) is True
+    assert manager._should_force_spawn(utterance) is True
+
+
 def test_router_tools_is_pure_dispatcher_set() -> None:
     """ROUTER_TOOLS matches the exact model-visible surface in ADR-0011.
 

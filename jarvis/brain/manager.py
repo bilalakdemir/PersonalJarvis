@@ -8544,10 +8544,23 @@ class BrainManager:
         )
 
     def _is_explicit_heavy_request(self, user_text: str) -> bool:
-        """Return whether the user semantically requested a heavy worker."""
+        """Return whether the user semantically requested a heavy worker.
+
+        The force-spawn phrase list historically recognized spawn/subagent but
+        not the equally explicit natural-language form "start a background
+        agent". Reuse the persistent-society worker-intent classifier so the
+        deterministic path and the LLM spawn gate agree on that request.
+        """
         text = (user_text or "").strip()
         if not text or _is_spawn_decline(text) or _is_spawn_feature_reference(text):
             return False
+        try:
+            from jarvis.society.intent import explicitly_requests_worker
+
+            if explicitly_requests_worker(text):
+                return True
+        except Exception:  # noqa: BLE001 — optional society intent must not break routing
+            log.debug("explicit worker intent probe unavailable", exc_info=True)
         trigger = self._get_force_spawn_pattern().search(text)
         if trigger is None:
             return False
@@ -11502,7 +11515,12 @@ class BrainManager:
             not screen_context.has_image
             and self._skill_turn_match is None
             and not self._agentic_ide_owns_turn(user_text)
+            and not self._is_explicit_heavy_request(user_text)
         ):
+            # Explicit background-worker requests outrank a coincidental local
+            # action embedded in the same sentence. Without this guard,
+            # "start a background agent and open/create ..." is consumed by the
+            # local-action fast path before force-spawn can honor the vehicle.
             local_action = await self._run_local_action_fast_path(
                 user_text, trace_id=turn_trace_id,
             )
