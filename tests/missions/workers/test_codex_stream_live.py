@@ -257,3 +257,95 @@ async def test_partial_stream_survives_startup_timeout(
     stream_path = tmp_path / "logs" / "stream.jsonl"
     assert stream_path.exists()
     assert "work before the cap" in stream_path.read_text(encoding="utf-8")
+
+
+def test_windows_prompt_requires_shell_recovery_before_reporting_failure() -> None:
+    prompt = cdw._prepare_codex_prompt("create the file", native_windows=True)
+
+    assert "You MUST retry" in prompt
+    assert "PowerShell" in prompt
+    assert "Only report a write failure after" in prompt
+    assert "Never write outside the current worktree" in prompt
+
+
+@pytest.mark.asyncio
+async def test_read_only_agent_message_is_terminal_error_even_with_zero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex 0.160 may describe the rejected write in prose and still exit 0."""
+    stdout = _LiveStream()
+
+    async def _fake_exec(*_a: Any, **_k: Any) -> _LiveProc:
+        return _LiveProc(stdout)
+
+    monkeypatch.setattr(cdw.asyncio, "create_subprocess_exec", _fake_exec)
+
+    stdout.queue.put_nowait(
+        _agent_line(
+            "The file could not be created because the workspace is read-only."
+        )
+    )
+    stdout.queue.put_nowait(
+        json.dumps({"type": "turn.completed", "usage": {}}).encode("utf-8") + b"\n"
+    )
+    stdout.queue.put_nowait(b"")
+
+    events = [event async for event in _spawn(CodexDirectWorker(), tmp_path)]
+    final = events[-1]
+
+    assert getattr(final, "type", "") == "result"
+    assert final.is_error is True
+    assert "sandbox rejected" in final.result
+
+
+@pytest.mark.asyncio
+async def test_successful_shell_recovery_overrides_prior_failed_file_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful bounded shell write must remain a successful worker turn."""
+    stdout = _LiveStream()
+
+    async def _fake_exec(*_a: Any, **_k: Any) -> _LiveProc:
+        return _LiveProc(stdout)
+
+    monkeypatch.setattr(cdw.asyncio, "create_subprocess_exec", _fake_exec)
+
+    stdout.queue.put_nowait(
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "item_patch",
+                    "type": "file_change",
+                    "status": "failed",
+                    "error": "workspace is read-only",
+                },
+            }
+        ).encode("utf-8")
+        + b"\n"
+    )
+    stdout.queue.put_nowait(
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "item_shell",
+                    "type": "command_execution",
+                    "status": "completed",
+                    "exit_code": 0,
+                    "command": "powershell -NoProfile -Command write",
+                },
+            }
+        ).encode("utf-8")
+        + b"\n"
+    )
+    stdout.queue.put_nowait(
+        json.dumps({"type": "turn.completed", "usage": {}}).encode("utf-8") + b"\n"
+    )
+    stdout.queue.put_nowait(b"")
+
+    events = [event async for event in _spawn(CodexDirectWorker(), tmp_path)]
+    final = events[-1]
+
+    assert getattr(final, "type", "") == "result"
+    assert final.is_error is False
