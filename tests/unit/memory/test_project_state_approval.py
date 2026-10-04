@@ -8,6 +8,7 @@ import pytest
 
 from jarvis.core.bus import EventBus
 from jarvis.core.events import ActionApproved
+from jarvis.core.project_state_events import ProjectStateMemoryProposalCreated
 from jarvis.memory.project_state_approval import (
     ProjectStateMemoryApprovalLifecycle,
     ProjectStateProposalIdentityError,
@@ -247,6 +248,60 @@ async def test_exact_approval_commits_and_closes_queue(tmp_path: Path) -> None:
             persisted.resulting_state_revision
             == result.resulting_state_revision
         )
+        assert "N-11 — Capability & Governance Enforcement" in (
+            root / "STATE.md"
+        ).read_text(encoding="utf-8")
+    finally:
+        await lifecycle.close()
+        await queue.close()
+        journal.close()
+
+
+@pytest.mark.asyncio
+async def test_recover_pending_replays_waiting_exact_proposal(tmp_path: Path) -> None:
+    bus = EventBus()
+    seen: list[ProjectStateMemoryProposalCreated] = []
+
+    async def _capture(event: ProjectStateMemoryProposalCreated) -> None:
+        seen.append(event)
+
+    bus.subscribe(ProjectStateMemoryProposalCreated, _capture)
+    _root, journal, queue, item, lifecycle, _ = await _setup(
+        tmp_path,
+        bus=bus,
+    )
+    try:
+        stored = await lifecycle.prepare(item.id)
+        seen.clear()
+        replayed, resumed = await lifecycle.recover_pending()
+        assert (replayed, resumed) == (1, 0)
+        assert len(seen) == 1
+        assert seen[0].queue_item_id == item.id
+        assert seen[0].transaction_id == stored.transaction_id
+        assert seen[0].proposal_digest == stored.proposal_digest
+    finally:
+        await lifecycle.close()
+        await queue.close()
+        journal.close()
+
+
+@pytest.mark.asyncio
+async def test_recover_pending_resumes_already_approved_apply(tmp_path: Path) -> None:
+    root, journal, queue, item, lifecycle, _ = await _setup(tmp_path)
+    try:
+        stored = await lifecycle.prepare(item.id)
+        approved = await lifecycle._proposals.approve_identity(
+            queue_item_id=item.id,
+            transaction_id=stored.transaction_id,
+            proposal_digest_value=stored.proposal_digest,
+        )
+        assert approved.status == "approved"
+
+        replayed, resumed = await lifecycle.recover_pending()
+        assert (replayed, resumed) == (0, 1)
+        persisted = await lifecycle._proposals.get(item.id)
+        assert persisted is not None
+        assert persisted.status == "applied"
         assert "N-11 — Capability & Governance Enforcement" in (
             root / "STATE.md"
         ).read_text(encoding="utf-8")
