@@ -5431,3 +5431,186 @@ body {
   }
 }
 
+/* AERION fidelity pass 5 — lock the running UI to the approved reference. */
+.aerion-global-header {
+  min-height: 64px;
+  padding-block: 4px;
+}
+
+.aerion-dashboard-grid {
+  grid-template-columns: minmax(310px, 24vw) minmax(560px, 1fr) minmax(310px, 24vw);
+  gap: 10px;
+  padding: 10px 12px 12px;
+}
+
+.aerion-core-stage {
+  border-color: rgba(0, 203, 255, 0.22);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(0, 163, 235, 0.08), transparent 42%),
+    radial-gradient(circle at 50% 50%, rgba(255, 175, 62, 0.035), transparent 27%),
+    #01070d;
+  box-shadow:
+    inset 0 0 120px rgba(0, 0, 0, 0.48),
+    0 0 28px rgba(0, 165, 255, 0.05);
+}
+
+.aerion-core-stage::before {
+  inset: 2% 5%;
+  border: 0;
+  background:
+    repeating-radial-gradient(circle at 50% 50%, transparent 0 30px, rgba(0, 203, 255, 0.025) 31px 32px);
+  opacity: 0.34;
+}
+
+.aerion-core-stage::after {
+  display: none;
+}
+
+.aerion-energy-figure {
+  inset: 0 1% 5%;
+}
+
+.aerion-energy-core-visual {
+  width: min(82vh, 99%);
+}
+
+.aerion-core-target-asset {
+  z-index: 1;
+  width: 99%;
+  height: 99%;
+  opacity: 1;
+  object-fit: contain;
+  filter:
+    saturate(1.28)
+    contrast(1.14)
+    brightness(1.16)
+    drop-shadow(0 0 20px rgba(0, 202, 255, 0.2))
+    drop-shadow(0 0 26px rgba(255, 179, 71, 0.16));
+  -webkit-mask-image: radial-gradient(circle at 50% 50%, #000 0%, #000 72%, rgba(0,0,0,.97) 79%, rgba(0,0,0,.52) 90%, transparent 100%);
+  mask-image: radial-gradient(circle at 50% 50%, #000 0%, #000 72%, rgba(0,0,0,.97) 79%, rgba(0,0,0,.52) 90%, transparent 100%);
+}
+
+.aerion-energy-svg-overlay {
+  z-index: 2;
+  opacity: 0.055;
+  mix-blend-mode: screen;
+}
+
+.aerion-energy-svg-overlay .aerion-tech-rings {
+  opacity: 0.24;
+}
+
+.aerion-energy-svg-overlay .aerion-energy-rays,
+.aerion-energy-svg-overlay .aerion-network-mesh,
+.aerion-energy-svg-overlay .aerion-star-nodes,
+.aerion-energy-svg-overlay .aerion-core-pedestal,
+.aerion-energy-svg-overlay .aerion-energy-orbit,
+.aerion-energy-svg-overlay .aerion-energy-core-glow,
+.aerion-energy-svg-overlay .aerion-energy-core-node {
+  opacity: 0.04;
+}
+
+.aerion-energy-aura {
+  opacity: 0.15;
+}
+
+.aerion-energy-aura-gold {
+  opacity: 0.18;
+}
+
+.aerion-energy-core-visual[data-visual-state="STANDBY"] .aerion-core-target-asset {
+  opacity: 1;
+  filter:
+    saturate(1.25)
+    contrast(1.15)
+    brightness(1.13)
+    drop-shadow(0 0 22px rgba(0, 202, 255, 0.2))
+    drop-shadow(0 0 24px rgba(255, 179, 71, 0.14));
+}
+
+.aerion-energy-core-visual[data-visual-state="LISTENING"] .aerion-core-target-asset,
+.aerion-energy-core-visual[data-visual-state="THINKING"] .aerion-core-target-asset,
+.aerion-energy-core-visual[data-visual-state="WORKING"] .aerion-core-target-asset,
+.aerion-energy-core-visual[data-visual-state="SPEAKING"] .aerion-core-target-asset {
+  opacity: 1;
+  filter:
+    saturate(1.34)
+    contrast(1.17)
+    brightness(1.2)
+    drop-shadow(0 0 30px rgba(0, 202, 255, 0.28))
+    drop-shadow(0 0 30px rgba(255, 179, 71, 0.2));
+}
+
+.aerion-core-capabilities {
+  gap: 10px;
+}
+
+.aerion-core-capabilities > div {
+  width: 72px;
+  min-height: 70px;
+  border-color: rgba(0, 214, 255, 0.6);
+  background:
+    linear-gradient(180deg, rgba(0, 35, 58, 0.88), rgba(0, 11, 21, 0.92));
+}
+
+.aerion-mode-readout {
+  top: 16px;
+  left: 20px;
+}
+
+.aerion-system-summary {
+  top: 16px;
+  right: 20px;
+}
+
+.aerion-core-caption {
+  bottom: 10px;
+  min-width: 240px;
+  padding-block: 5px;
+}
+
+.aerion-side-column {
+  gap: 9px;
+}
+
+.aerion-side-column .aerion-hud-panel,
+.aerion-intel-panel {
+  border-radius: 10px;
+  border-color: rgba(0, 207, 255, 0.52);
+  background:
+    linear-gradient(180deg, rgba(3, 22, 36, 0.95), rgba(1, 11, 19, 0.96));
+}
+
+.aerion-intel-panel {
+  padding: 12px 14px;
+}
+
+.aerion-intel-panel header {
+  font-size: 12px;
+}
+
+.aerion-intel-panel p {
+  margin-top: 8px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.aerion-empty-panel {
+  min-height: 78px;
+}
+
+.aerion-command-input {
+  height: 58px;
+}
+
+.aerion-quick-actions {
+  justify-content: center;
+}
+
+@media (max-width: 1450px) {
+  .aerion-dashboard-grid {
+    grid-template-columns: 260px minmax(500px, 1fr) 270px;
+  }
+}
+
