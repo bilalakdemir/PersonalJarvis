@@ -5239,3 +5239,150 @@ body {
   }
 }
 
+/* AERION fidelity pass 4 — use the approved core artwork as the visual base
+ * while preserving live runtime-state animation as an overlay. */
+.aerion-energy-core-visual {
+  width: min(80vh, 96%);
+  aspect-ratio: 1;
+}
+
+.aerion-core-target-asset {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  z-index: 1;
+  width: 108%;
+  height: 108%;
+  transform: translate(-50%, -50%);
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.98;
+  filter:
+    saturate(1.08)
+    contrast(1.08)
+    brightness(0.98)
+    drop-shadow(0 0 18px rgba(0, 196, 255, 0.18))
+    drop-shadow(0 0 24px rgba(255, 178, 66, 0.12));
+  -webkit-mask-image: radial-gradient(ellipse 58% 64% at 50% 50%, #000 0%, #000 64%, rgba(0,0,0,.93) 76%, rgba(0,0,0,.35) 91%, transparent 100%);
+  mask-image: radial-gradient(ellipse 58% 64% at 50% 50%, #000 0%, #000 64%, rgba(0,0,0,.93) 76%, rgba(0,0,0,.35) 91%, transparent 100%);
+  animation: aerion-target-breathe var(--aerion-pulse-speed) ease-in-out infinite;
+}
+
+.aerion-energy-svg-overlay {
+  position: relative;
+  z-index: 2;
+  opacity: 0.18;
+  mix-blend-mode: screen;
+}
+
+.aerion-energy-svg-overlay .aerion-tech-rings {
+  opacity: 0.42;
+}
+
+.aerion-energy-svg-overlay .aerion-energy-rays {
+  opacity: 0.16;
+}
+
+.aerion-energy-svg-overlay .aerion-energy-particles {
+  opacity: 0.34;
+}
+
+.aerion-energy-svg-overlay .aerion-network-mesh,
+.aerion-energy-svg-overlay .aerion-star-nodes,
+.aerion-energy-svg-overlay .aerion-core-pedestal,
+.aerion-energy-svg-overlay .aerion-energy-orbit {
+  opacity: 0.12;
+}
+
+.aerion-energy-svg-overlay .aerion-energy-core-glow,
+.aerion-energy-svg-overlay .aerion-energy-core-node {
+  opacity: 0.22;
+}
+
+.aerion-energy-core-visual[data-visual-state="OFF"] .aerion-core-target-asset {
+  opacity: 0.26;
+  filter: grayscale(0.78) saturate(0.35) brightness(0.46);
+}
+
+.aerion-energy-core-visual[data-visual-state="STANDBY"] .aerion-core-target-asset {
+  opacity: 0.95;
+  filter:
+    saturate(1.02)
+    contrast(1.09)
+    brightness(0.93)
+    drop-shadow(0 0 18px rgba(0, 196, 255, 0.16))
+    drop-shadow(0 0 26px rgba(255, 178, 66, 0.12));
+}
+
+.aerion-energy-core-visual[data-visual-state="LISTENING"] .aerion-core-target-asset {
+  opacity: 1;
+  filter:
+    saturate(1.18)
+    contrast(1.08)
+    brightness(1.08)
+    hue-rotate(-5deg)
+    drop-shadow(0 0 26px rgba(32, 244, 232, 0.34));
+}
+
+.aerion-energy-core-visual[data-visual-state="THINKING"] .aerion-core-target-asset,
+.aerion-energy-core-visual[data-visual-state="WORKING"] .aerion-core-target-asset {
+  opacity: 1;
+  filter:
+    saturate(1.22)
+    contrast(1.14)
+    brightness(1.08)
+    drop-shadow(0 0 30px rgba(0, 184, 255, 0.34))
+    drop-shadow(0 0 28px rgba(255, 178, 66, 0.18));
+}
+
+.aerion-energy-core-visual[data-visual-state="SPEAKING"] .aerion-core-target-asset {
+  opacity: 1;
+  filter:
+    saturate(1.08)
+    contrast(1.08)
+    brightness(1.18)
+    drop-shadow(0 0 32px rgba(216, 251, 255, 0.36));
+}
+
+.aerion-energy-core-visual[data-visual-state="WAITING_FOR_APPROVAL"] .aerion-core-target-asset {
+  filter:
+    sepia(0.12)
+    saturate(1.16)
+    contrast(1.08)
+    brightness(1.02)
+    drop-shadow(0 0 30px rgba(255, 184, 74, 0.26));
+}
+
+.aerion-energy-core-visual[data-visual-state="ERROR"] .aerion-core-target-asset {
+  filter:
+    hue-rotate(128deg)
+    saturate(1.18)
+    brightness(0.78)
+    contrast(1.15)
+    drop-shadow(0 0 28px rgba(255, 77, 109, 0.28));
+}
+
+.aerion-energy-core-visual[data-visual-state="COMPLETED"] .aerion-core-target-asset {
+  filter:
+    hue-rotate(35deg)
+    saturate(1.22)
+    brightness(1.18)
+    contrast(1.08)
+    drop-shadow(0 0 34px rgba(38, 230, 163, 0.34));
+}
+
+@keyframes aerion-target-breathe {
+  0%, 100% {
+    transform: translate(-50%, -50%) scale(0.992);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.018);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aerion-core-target-asset {
+    animation: none !important;
+  }
+}
+
