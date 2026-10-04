@@ -6102,6 +6102,7 @@
       "read_only": {
         "no_out_of_band_route": "This request can only be answered where it was asked.",
         "answered_in_chat": "Answer this request in its chat.",
+        "answered_in_conversation": "Answer this request in the conversation where it was asked.",
         "project_state_route_unavailable": "Project-state changes cannot be approved from the HUD yet."
       }
     },
