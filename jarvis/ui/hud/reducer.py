@@ -44,6 +44,7 @@ from typing import Any, Final
 
 from jarvis.core.events import (
     ActionApprovalRequired,
+    ActionConfirmationDeferred,
     ActionApproved,
     ActionDenied,
     ActionExecuted,
@@ -157,6 +158,7 @@ STALE_AFTER_NS: Final[dict[str, int]] = {
 _CHAT_APPROVAL_REF_PREFIX: Final[str] = "agent-chat:"
 _READ_ONLY_NO_ROUTE: Final[str] = "no_out_of_band_route"
 _READ_ONLY_CHAT: Final[str] = "answered_in_chat"
+_READ_ONLY_CONVERSATION: Final[str] = "answered_in_conversation"
 _READ_ONLY_PROJECT_STATE: Final[str] = "project_state_route_unavailable"
 
 #: Worker kills that are a decision, not a failure.
@@ -346,6 +348,7 @@ class HudReducer:
             ErrorOccurred: self._on_error,
             ActionProposed: self._on_action_proposed,
             ActionApprovalRequired: self._on_approval_required,
+            ActionConfirmationDeferred: self._on_confirmation_deferred,
             ActionApproved: self._on_action_terminal,
             ActionDenied: self._on_action_terminal,
             ActionExecuted: self._on_action_terminal,
@@ -1050,6 +1053,34 @@ class HudReducer:
         # Index by the identity the terminal events carry.
         self._tool_approval_index[(trace, tool)] = approval_id
         return self._open_approval(approval, ts)
+
+    def _on_confirmation_deferred(self, event: ActionConfirmationDeferred) -> bool:
+        """Project a two-turn conversational confirmation as an approval card."""
+        ts = _ts(event)
+        trace = _trace(event)
+        tool = _safe(event.tool_name, LABEL_CHARS) or "tool"
+        approval_id = f"tool_call:-:{trace}:{tool}"
+        orphan_key = f"tool_call:*:{trace}:{tool}"
+        orphan_ts = self._approval_orphans.get(orphan_key)
+        if orphan_ts is not None and orphan_ts >= ts:
+            self._approval_orphans.pop(orphan_key, None)
+            return False
+        self._tool_approval_index[(trace, tool)] = approval_id
+        return self._open_approval(
+            HudApproval(
+                approval_id=approval_id,
+                kind="tool_call",
+                action=tool,
+                decision_channel="none",
+                reason=_safe(event.reason, LABEL_CHARS),
+                risk_tier=_safe(event.risk_tier, LABEL_CHARS),
+                target_preview=_safe(event.args_preview),
+                trace_id=trace,
+                requested_at_ns=ts,
+                read_only_reason=_READ_ONLY_CONVERSATION,
+            ),
+            ts,
+        )
 
     def _close_tool_approval(
         self, trace: str, tool: str, ts: int, *, remember_orphan: bool
