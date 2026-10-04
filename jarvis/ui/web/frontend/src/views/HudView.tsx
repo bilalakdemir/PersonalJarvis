@@ -149,6 +149,8 @@ export function HudView() {
   const activeOps = [...snapshot.agent_activity, ...snapshot.active_operations];
   const runningCount = activeOps.filter((item) => item.status === "running").length;
   const agentCount = snapshot.agent_activity.length;
+  const headerTime = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(nowMs);
+  const headerDate = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "2-digit", month: "short" }).format(nowMs);
 
   return (
     <div
@@ -190,6 +192,12 @@ export function HudView() {
           <div className="aerion-status-pill">
             <span className="aerion-status-dot" aria-hidden />
             <span>{connection === "CONNECTED" ? "ONLINE" : connection}</span>
+          </div>
+          <div className="aerion-runtime-chip"><span>AGENTS</span><strong>{agentCount}</strong></div>
+          <div className="aerion-runtime-chip"><span>TASKS</span><strong>{runningCount}</strong></div>
+          <div className="aerion-clock">
+            <strong>{headerDate}</strong>
+            <span>{headerTime}</span>
           </div>
           <div className="aerion-header-status" data-testid="hud-status-line">
             <span>{coreStateLabel}</span>
