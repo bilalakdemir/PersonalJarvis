@@ -223,6 +223,7 @@ def test_apply_happy_path_pulls_and_signals_restart(
     assert body["desktop_integration_warning"] is None
     assert [
         "fetch",
+        "--progress",
         "--depth",
         "1",
         "origin",
