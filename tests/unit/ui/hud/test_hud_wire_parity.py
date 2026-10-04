@@ -89,6 +89,7 @@ def test_every_presented_value_has_a_string_in_every_locale() -> None:
     read_only_reasons = {
         reducer_mod._READ_ONLY_NO_ROUTE,  # noqa: SLF001
         reducer_mod._READ_ONLY_CHAT,  # noqa: SLF001
+        reducer_mod._READ_ONLY_CONVERSATION,  # noqa: SLF001
         reducer_mod._READ_ONLY_PROJECT_STATE,  # noqa: SLF001
     }
     keys = (
