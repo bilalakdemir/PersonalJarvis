@@ -324,14 +324,18 @@ class HangingHarnessManager:
     """dispatch() blocks forever; exposes get() so the runner can cancel."""
 
     def __init__(self) -> None:
+        import asyncio
+
         self.harness = HangingHarness()
         self.dispatched: list[tuple[str, Any]] = []
+        self.dispatched_event = asyncio.Event()
 
     def get(self, name: str) -> Any:
         return self.harness
 
     async def dispatch(self, name: str, task: Any):
         self.dispatched.append((name, task))
+        self.dispatched_event.set()
         harness = self.harness
 
         async def gen():
@@ -410,7 +414,7 @@ async def test_cancel_mid_stream_stops_the_harness(
 
     token = CancelToken()
     run_task = asyncio.create_task(runner.run(tid, token))
-    await asyncio.sleep(0.05)  # the stream is now pending with no chunks
+    await asyncio.wait_for(hm.dispatched_event.wait(), timeout=2.0)
     token.cancel("user_cancel")
     await asyncio.wait_for(run_task, timeout=2.0)
 
