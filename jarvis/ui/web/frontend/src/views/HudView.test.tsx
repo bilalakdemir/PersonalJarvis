@@ -99,6 +99,7 @@ describe("HudView", () => {
     expect(screen.getByTestId("aerion-zone-center")).toBeTruthy();
     expect(screen.getByTestId("aerion-zone-right")).toBeTruthy();
     expect(screen.getByTestId("hud-reactor").getAttribute("data-state")).toBe("IDLE");
+    expect(screen.getByTestId("hud-reactor").getAttribute("data-visual-state")).toBe("STANDBY");
   });
 
   it("renders a readable status for the primary state, independent of motion", () => {
@@ -202,6 +203,13 @@ describe("HudView", () => {
     const panel = screen.getByTestId("hud-panel-project");
     expect(panel.textContent).toContain("Atlas");
     expect(panel.textContent).toContain("T-2 ship the HUD");
+  });
+
+  it("renders OFF only from an actually disconnected client", () => {
+    useHudStore.getState().applySnapshot(snapshot({ primary_state: "IDLE" }));
+    useEventStore.setState({ connected: false, wsWarming: false });
+    render(<HudView />);
+    expect(screen.getByTestId("hud-reactor").getAttribute("data-visual-state")).toBe("OFF");
   });
 
   it("says the connection is being re-established while the socket is down", () => {
