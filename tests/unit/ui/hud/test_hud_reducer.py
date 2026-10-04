@@ -13,6 +13,7 @@ import pytest
 
 from jarvis.core.events import (
     ActionApprovalRequired,
+    ActionConfirmationDeferred,
     ActionApproved,
     ActionDenied,
     ActionExecuted,
@@ -81,6 +82,50 @@ def snap(reducer: HudReducer, now_s: float = 10.0):
 
 def state(new: str, ts: float, prev: str = "IDLE") -> SystemStateChanged:
     return SystemStateChanged(new_state=new, previous=prev, timestamp_ns=at(ts))
+
+
+def test_conversational_confirmation_is_visible_until_answered() -> None:
+    r = HudReducer()
+    tid = uuid4()
+    r.apply(
+        ActionProposed(
+            trace_id=tid,
+            tool_name="gmail",
+            args={"action": "send_message"},
+            risk_tier="ask",
+            timestamp_ns=at(1),
+        )
+    )
+    r.apply(
+        ActionConfirmationDeferred(
+            trace_id=tid,
+            tool_name="gmail",
+            risk_tier="ask",
+            reason="risk_tier",
+            args_preview="send_message",
+            timestamp_ns=at(2),
+        )
+    )
+    waiting = snap(r, 3)
+    assert waiting.primary_state == "WAITING_FOR_APPROVAL"
+    assert len(waiting.approval_requests) == 1
+    card = waiting.approval_requests[0]
+    assert card.trace_id == str(tid)
+    assert card.action == "gmail"
+    assert card.decision_channel == "none"
+    assert card.read_only_reason == "answered_in_conversation"
+
+    r.apply(
+        ActionDenied(
+            trace_id=tid,
+            tool_name="gmail",
+            reason="voice_vetoed",
+            timestamp_ns=at(4),
+        )
+    )
+    done = snap(r, 5)
+    assert done.approval_requests == ()
+    assert done.active_operations == ()
 
 
 # --------------------------------------------------------------------------- primary
