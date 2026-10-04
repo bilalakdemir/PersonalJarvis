@@ -3618,3 +3618,285 @@ body {
     color: hsl(var(--diff-del));
   }
 }
+
+/* ==========================================================================
+ * AERION Command Core — Slice 1 visual foundation
+ * --------------------------------------------------------------------------
+ * Scoped to the HUD workspace so the accepted Personal Jarvis shell and every
+ * other section keep their existing theme contracts. These are product tokens,
+ * not operational state: HudSnapshot remains the sole semantic authority.
+ * ========================================================================== */
+.aerion-command-core {
+  --aerion-bg: #02070d;
+  --aerion-surface: #04101a;
+  --aerion-panel: rgba(4, 17, 28, 0.82);
+  --aerion-cyan: #00c8ff;
+  --aerion-blue: #167dff;
+  --aerion-aqua: #20f4e8;
+  --aerion-gold: #ffb347;
+  --aerion-emerald: #26e6a3;
+  --aerion-amber: #ffb84a;
+  --aerion-crimson: #ff4d6d;
+  --aerion-text: #eaf8ff;
+  --aerion-muted: #7fa7bb;
+  --aerion-hairline: rgba(44, 195, 255, 0.25);
+
+  min-height: 100%;
+  padding: 18px;
+  color: var(--aerion-text);
+  background:
+    linear-gradient(rgba(0, 200, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 200, 255, 0.035) 1px, transparent 1px),
+    radial-gradient(circle at 50% 42%, rgba(22, 125, 255, 0.15), transparent 38%),
+    var(--aerion-bg);
+  background-size: 40px 40px, 40px 40px, auto, auto;
+}
+
+.aerion-command-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 16px;
+  padding: 4px 6px 14px;
+  border-bottom: 1px solid var(--aerion-hairline);
+}
+
+.aerion-eyebrow,
+.aerion-command-label,
+.aerion-zone-heading,
+.aerion-mode-caption {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.aerion-eyebrow {
+  margin: 0 0 2px;
+  color: var(--aerion-muted);
+  font-size: 10px;
+}
+
+.aerion-wordmark {
+  color: var(--aerion-text);
+  font-size: clamp(1.4rem, 2vw, 2rem);
+  font-weight: 600;
+  letter-spacing: 0.28em;
+  line-height: 1;
+  text-shadow: 0 0 26px rgba(0, 200, 255, 0.28);
+}
+
+.aerion-command-label {
+  color: var(--aerion-cyan);
+  font-size: 10px;
+}
+
+.aerion-status-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--aerion-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.aerion-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--aerion-emerald);
+  box-shadow: 0 0 12px rgba(38, 230, 163, 0.7);
+}
+
+.aerion-command-core[data-connection-state="DISCONNECTED"] .aerion-status-dot {
+  background: var(--aerion-crimson);
+  box-shadow: 0 0 12px rgba(255, 77, 109, 0.6);
+}
+
+.aerion-command-core[data-connection-state="RECONNECTING"] .aerion-status-dot {
+  background: var(--aerion-amber);
+  box-shadow: 0 0 12px rgba(255, 184, 74, 0.6);
+}
+
+.aerion-command-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 330px) minmax(420px, 1fr) minmax(280px, 350px);
+  gap: 16px;
+  align-items: start;
+}
+
+.aerion-zone {
+  min-width: 0;
+}
+
+.aerion-zone-center {
+  display: flex;
+  min-height: 620px;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.aerion-zone-heading {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 4px 8px;
+  color: var(--aerion-muted);
+  font-size: 9px;
+}
+
+.aerion-core-stage {
+  position: relative;
+  display: flex;
+  min-height: 430px;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--aerion-hairline);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% 52%, rgba(0, 200, 255, 0.12), transparent 42%),
+    linear-gradient(180deg, rgba(4, 17, 28, 0.86), rgba(2, 7, 13, 0.9));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.015),
+    0 24px 80px rgba(0, 0, 0, 0.34);
+}
+
+.aerion-core-stage::before,
+.aerion-core-stage::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+}
+
+.aerion-core-stage::before {
+  inset: 12px;
+  border: 1px solid rgba(0, 200, 255, 0.1);
+  border-radius: 14px;
+}
+
+.aerion-core-stage::after {
+  width: 54%;
+  aspect-ratio: 1;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(0, 200, 255, 0.08), transparent 68%);
+  filter: blur(18px);
+}
+
+.aerion-mode-readout {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 2;
+  display: grid;
+  gap: 2px;
+  color: var(--aerion-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+}
+
+.aerion-mode-readout strong {
+  color: var(--aerion-cyan);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.aerion-mode-caption {
+  font-size: 9px;
+}
+
+.aerion-quiet {
+  z-index: 2;
+  margin-top: 6px;
+  color: var(--aerion-muted);
+  font-size: 12px;
+}
+
+.aerion-hud-panel {
+  position: relative;
+  overflow: hidden;
+  border-color: var(--aerion-hairline) !important;
+  background: var(--aerion-panel) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.025),
+    0 16px 42px rgba(0, 0, 0, 0.24);
+}
+
+.aerion-hud-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 16px;
+  width: 54px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--aerion-cyan), transparent);
+  opacity: 0.8;
+}
+
+.aerion-hud-panel > h2 {
+  color: var(--aerion-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+}
+
+.aerion-hud-card {
+  border-color: rgba(44, 195, 255, 0.16) !important;
+  background: rgba(2, 7, 13, 0.56) !important;
+}
+
+.aerion-command-core .hud-reactor {
+  z-index: 1;
+  filter: drop-shadow(0 0 30px rgba(0, 200, 255, 0.2));
+}
+
+@media (max-width: 1180px) {
+  .aerion-command-grid {
+    grid-template-columns: minmax(240px, 0.8fr) minmax(420px, 1.4fr);
+  }
+
+  .aerion-zone-right {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 820px) {
+  .aerion-command-core {
+    padding: 12px;
+  }
+
+  .aerion-command-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .aerion-command-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .aerion-zone-center {
+    order: -1;
+    min-height: 0;
+  }
+
+  .aerion-core-stage {
+    min-height: 360px;
+  }
+
+  .aerion-zone-right {
+    grid-column: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aerion-command-core *,
+  .aerion-command-core *::before,
+  .aerion-command-core *::after {
+    scroll-behavior: auto !important;
+  }
+}
+
