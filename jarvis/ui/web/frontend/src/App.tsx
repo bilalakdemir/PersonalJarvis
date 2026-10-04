@@ -277,7 +277,7 @@ export default function App() {
   const activeSection = useEventStore((s) => s.activeSection);
   const agentsNavOpen = useSocietyShell((s) => s.navigationOpen);
   const toggleAgentsNav = useSocietyShell((s) => s.toggleNavigation);
-  const hideNavigation = activeSection === "agents" && !agentsNavOpen;
+  const hideNavigation = activeSection === "hud" || (activeSection === "agents" && !agentsNavOpen);
   const solo = useEventStore((s) => s.solo);
   const detachedViews = useEventStore((s) => s.detachedViews);
   /*
@@ -288,15 +288,17 @@ export default function App() {
    * section folds the main column. The collapsed flag mirrors the rail the sidebar itself reports — a dragged
    * narrow column reads as collapsed even before the toggle was touched.
    */
-  const navToggle = activeSection === "agents"
-    ? {
-        collapsed: !agentsNavOpen || sidebar.size < SIDEBAR_RAIL_AT_WIDTH,
-        onToggle: toggleAgentsNav,
-      }
-    : {
-        collapsed: navCollapsed || sidebar.size < SIDEBAR_RAIL_AT_WIDTH,
-        onToggle: toggleNav,
-      };
+  const navToggle = activeSection === "hud"
+    ? undefined
+    : activeSection === "agents"
+      ? {
+          collapsed: !agentsNavOpen || sidebar.size < SIDEBAR_RAIL_AT_WIDTH,
+          onToggle: toggleAgentsNav,
+        }
+      : {
+          collapsed: navCollapsed || sidebar.size < SIDEBAR_RAIL_AT_WIDTH,
+          onToggle: toggleNav,
+        };
 
   /*
    * The realtime broker must exist exactly ONCE across all windows: it
@@ -397,7 +399,15 @@ export default function App() {
         {/* Gray, like the sidebar. The content panel below rounds its
             top-left corner so this gray shows in the curve. */}
         <div className="h-8 shrink-0" data-testid="caption-rule" />
-        <div className={activeSection === "agents" ? "flex min-h-0 min-w-0 flex-1 flex-col" : "jarvis-sheet flex min-h-0 min-w-0 flex-1 flex-col"}>
+        <div
+          className={
+            activeSection === "hud"
+              ? "aerion-shell flex min-h-0 min-w-0 flex-1 flex-col"
+              : activeSection === "agents"
+                ? "flex min-h-0 min-w-0 flex-1 flex-col"
+                : "jarvis-sheet flex min-h-0 min-w-0 flex-1 flex-col"
+          }
+        >
         {/* App-wide macOS permission alert — topmost so a missing grant is
             impossible to miss on any view. No-op on other platforms. */}
         <PermissionsAlertBanner />
@@ -407,7 +417,7 @@ export default function App() {
             told about, since nothing else reports it. */}
         <InputIsolationBanner />
         <TopBar navToggle={navToggle} />
-        {!(["agentic-ide", "chat-workspace", "agentic-ide-classic"].includes(activeSection)) && <VoiceWarmingBanner />}
+        {!(["agentic-ide", "chat-workspace", "agentic-ide-classic", "hud"].includes(activeSection)) && <VoiceWarmingBanner />}
         {/* The one-time "all lights green" note — the first time every
             section of the active voice mode answers. Never again after. */}
         <ReadyCelebration />
