@@ -101,6 +101,43 @@ def test_lock_identity_survives_platform_line_endings(installer, monkeypatch, tm
     assert not install.is_installed(data)
 
 
+def test_browser_candidate_order_prefers_brave_before_chrome() -> None:
+    windows = install._system_browser_paths(  # noqa: SLF001 — pin selection contract
+        "win32",
+        {
+            "ProgramFiles": r"C:\Program Files",
+            "ProgramFiles(x86)": r"C:\Program Files (x86)",
+            "LOCALAPPDATA": r"C:\Users\test\AppData\Local",
+        },
+    )
+    assert "BraveSoftware" in str(windows[0])
+    assert "BraveSoftware" in str(windows[1])
+    assert "Google" in str(windows[3])
+
+    mac = install._system_browser_paths("darwin", {})  # noqa: SLF001 — pin selection contract
+    assert "Brave Browser.app" in str(mac[0])
+    assert "Google Chrome.app" in str(mac[1])
+
+
+def test_system_browser_path_lookup_prefers_brave(monkeypatch) -> None:
+    found = {
+        "brave-browser": "/opt/brave/brave",
+        "google-chrome": "/opt/google/chrome",
+    }
+    monkeypatch.setattr(install.shutil, "which", lambda name: found.get(name))
+    monkeypatch.setattr(install, "_system_browser_paths", lambda: ())
+
+    assert install.system_browser_executable() == Path("/opt/brave/brave")
+
+
+def test_preferred_browser_falls_back_to_managed_chromium(monkeypatch, tmp_path: Path) -> None:
+    managed = tmp_path / "managed-chromium"
+    monkeypatch.setattr(install, "system_browser_executable", lambda: None)
+    monkeypatch.setattr(install, "browser_executable", lambda *_: managed)
+
+    assert install.preferred_browser_executable(tmp_path) == managed
+
+
 def test_python311_host_uses_managed_python312_runtime(monkeypatch, tmp_path: Path) -> None:
     root = install.install_root(tmp_path)
     commands: list[list[str]] = []
