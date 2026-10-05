@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from jarvis.society.browser import install
+from jarvis.society.browser import bootstrap, install
 
 
 @pytest.fixture
@@ -42,6 +42,7 @@ def installer(monkeypatch, tmp_path):
     monkeypatch.setattr(install, "_run", run)
     monkeypatch.setattr(install, "managed_python_request", lambda *_: "3.12")
     monkeypatch.setattr(install.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(bootstrap, "ensure_uv", lambda *_: "uv")
     yield tmp_path, root, launches, failure
     install._reset_for_tests()
 
@@ -98,3 +99,42 @@ def test_lock_identity_survives_platform_line_endings(installer, monkeypatch, tm
     assert install.is_installed(data)
     copy.write_bytes(original + b"# changed dependency manifest\n")
     assert not install.is_installed(data)
+
+
+def test_python311_host_uses_managed_python312_runtime(monkeypatch, tmp_path: Path) -> None:
+    root = install.install_root(tmp_path)
+    commands: list[list[str]] = []
+
+    def run(cmd, **kwargs):
+        commands.append([str(part) for part in cmd])
+        if "venv" in cmd:
+            runtime = Path(cmd[-1])
+            executable = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"test runtime")
+        if "--probe" in cmd:
+            binary = root / "browsers" / "chrome"
+            binary.parent.mkdir(exist_ok=True)
+            binary.write_bytes(b"test browser")
+            return json.dumps(
+                {
+                    "kind": "probe",
+                    "ok": True,
+                    "executable": str(binary),
+                    "version": "test",
+                    "packages": [],
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(install, "_run", run)
+    monkeypatch.setattr(install, "managed_python_request", lambda *_: "3.12")
+    monkeypatch.setattr(install.sys, "version_info", (3, 11, 9))
+    monkeypatch.setattr(install.sys, "frozen", False, raising=False)
+    monkeypatch.setattr(bootstrap, "ensure_uv", lambda *_: "uv")
+
+    install.ensure_installed(tmp_path)
+
+    first_venv = next(command for command in commands if "venv" in command)
+    assert first_venv[:4] == ["uv", "venv", "--python", "3.12"]
+    assert str(root / "runtimes") in first_venv[-1]
