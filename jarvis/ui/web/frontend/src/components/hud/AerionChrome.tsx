@@ -49,7 +49,12 @@ import { sendChatMessage } from "@/lib/chat";
 import type { AerionVisualState } from "@/lib/hudSemantics";
 import { cn } from "@/lib/utils";
 import { useEventStore, type SectionId } from "@/store/events";
-import type { HudActivity, HudConnectionState } from "@/types/hud";
+import type {
+  HudActivity,
+  HudConnectionState,
+  HudProject,
+  HudProjectContext,
+} from "@/types/hud";
 
 type Navigate = (section: SectionId) => void;
 
@@ -448,10 +453,14 @@ export function CommandDock({
   say,
   onNavigate,
   operations,
+  project,
+  projectContext,
 }: {
   say: AerionSay;
   onNavigate: Navigate;
   operations: HudActivity[];
+  project: HudProject | null;
+  projectContext: HudProjectContext;
 }) {
   const connected = useEventStore((s) => s.connected);
   const wsWarming = useEventStore((s) => s.wsWarming);
@@ -587,6 +596,20 @@ export function CommandDock({
         ? say("command.with_files")
         : say("command.placeholder");
 
+  const projectContextLabel =
+    projectContext.status === "RESOLVED"
+      ? project?.project_name || projectContext.project_id || say("project.context.resolved")
+      : projectContext.status === "AMBIGUOUS"
+        ? say("project.context.ambiguous")
+        : projectContext.status === "UNAVAILABLE"
+          ? say("project.context.unavailable")
+          : say("project.context.none");
+
+  const projectContextDetail =
+    projectContext.status === "RESOLVED" && project?.current_task
+      ? project.current_task
+      : projectContext.detail;
+
   const quick: Array<{ key: string; label: string; icon: ReactNode; section: SectionId }> = [
     { key: "research", label: say("quick.research"), icon: <ScanSearch />, section: "chats" },
     { key: "analyze", label: say("quick.analyze"), icon: <FileSearch />, section: "chats" },
@@ -667,6 +690,18 @@ export function CommandDock({
         >
           <Send aria-hidden />
         </button>
+      </div>
+
+      <div
+        className="aerion-command-awareness"
+        data-status={projectContext.status}
+        data-testid="aerion-command-project-context"
+        title={projectContextDetail || undefined}
+      >
+        <FolderKanban aria-hidden />
+        <span className="aerion-command-awareness-label">{say("project.context")}</span>
+        <strong>{projectContextLabel}</strong>
+        {projectContextDetail ? <em>{projectContextDetail}</em> : null}
       </div>
 
       {stagedFiles.length > 0 ? (
