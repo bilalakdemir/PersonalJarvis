@@ -16,6 +16,7 @@ from jarvis.core.project_state_events import (
     ProjectStateTransactionStarted,
 )
 from jarvis.core.protocols import EventPublisher
+from jarvis.core.redact import safe_preview
 
 from .models import (
     ProjectRegistryEntry,
@@ -175,6 +176,21 @@ class ProjectStateStore:
 
                 after = await asyncio.to_thread(load_project_context, entry)
                 current_task = after.snapshot.current_task if after.snapshot is not None else None
+                phase = (
+                    safe_preview(after.snapshot.phase, max_chars=80).strip()
+                    if after.snapshot is not None
+                    else ""
+                )
+                next_step = (
+                    safe_preview(after.snapshot.next_step, max_chars=240).strip()
+                    if after.snapshot is not None
+                    else ""
+                )
+                blockers = (
+                    safe_preview(after.snapshot.blockers, max_chars=240).strip()
+                    if after.snapshot is not None
+                    else ""
+                )
                 await self._publish(
                     ProjectStateCommitted(
                         trace_id=trace,
@@ -184,6 +200,9 @@ class ProjectStateStore:
                         resulting_state_revision=result.resulting_state_revision or "",
                         changed_files=result.changed_files,
                         current_task=current_task,
+                        phase=phase,
+                        next_step=next_step,
+                        blockers=blockers,
                     )
                 )
                 if before_task != current_task:
