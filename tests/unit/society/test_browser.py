@@ -103,6 +103,21 @@ async def rt(tmp_path: Path):
         await runtime.close()
 
 
+async def test_own_browser_request_uses_preferred_browser(rt, tmp_path, fake_runner, monkeypatch):
+    preferred = tmp_path / "brave.exe"
+    monkeypatch.setattr(
+        "jarvis.society.browser.install.preferred_browser_executable",
+        lambda *_: preferred,
+    )
+    jobs = _jobs(tmp_path, fake_runner)
+    scout = await rt.roster.get("scout")
+
+    request = jobs._request_base(scout, headless=True)  # noqa: SLF001 — selection contract
+
+    assert request["executable_path"] == str(preferred)
+    assert "cdp_url" not in request
+
+
 async def test_run_streams_steps_and_returns_the_outcome(rt, tmp_path, fake_runner):
     jobs = _jobs(tmp_path, fake_runner)
     scout = await rt.roster.get("scout")
