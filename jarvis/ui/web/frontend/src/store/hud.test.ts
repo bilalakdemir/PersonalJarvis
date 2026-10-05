@@ -10,6 +10,7 @@ function wire(revision: number, epoch = "e1", primary = "IDLE") {
     attention: [],
     active_project: null,
     active_operations: [],
+    recent_outputs: [],
     approval_requests: [],
     agent_activity: [],
     memory_activity: [],
