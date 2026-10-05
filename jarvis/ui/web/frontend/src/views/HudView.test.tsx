@@ -20,6 +20,7 @@ function snapshot(overrides: Partial<HudSnapshot> = {}): HudSnapshot {
     attention: [],
     active_project: null,
     active_operations: [],
+    recent_outputs: [],
     approval_requests: [],
     agent_activity: [],
     memory_activity: [],
@@ -192,6 +193,9 @@ describe("HudView", () => {
           project_id: "p1",
           project_name: "Atlas",
           current_task: "T-2 ship the HUD",
+          phase: "Operational Wiring",
+          next_step: "Wire Recent Outputs",
+          blockers: "None",
           state_revision: "r2",
           state_valid: true,
           issue_codes: [],
@@ -203,6 +207,38 @@ describe("HudView", () => {
     const panel = screen.getByTestId("hud-panel-project");
     expect(panel.textContent).toContain("Atlas");
     expect(panel.textContent).toContain("T-2 ship the HUD");
+    expect(panel.textContent).toContain("Wire Recent Outputs");
+    expect(panel.textContent).toContain("None");
+  });
+
+  it("keeps unavailable external sources explicit and renders only real recent outputs", () => {
+    useHudStore.getState().applySnapshot(
+      snapshot({
+        recent_outputs: [
+          {
+            activity_id: "tool:t:report",
+            kind: "tool",
+            label: "report",
+            status: "completed",
+            trace_id: "t",
+            project_id: "p1",
+            mission_id: null,
+            task_id: null,
+            worker_id: null,
+            run_id: null,
+            detail: "report.md created",
+            started_at_ns: 1_000_000,
+            updated_at_ns: 2_000_000,
+          },
+        ],
+      }),
+    );
+    render(<HudView />);
+
+    expect(screen.getByTestId("aerion-panel-inbox").textContent).toContain("Source unavailable");
+    expect(screen.getByTestId("aerion-panel-upcoming").textContent).toContain("Source unavailable");
+    expect(screen.getByTestId("aerion-panel-outputs").textContent).toContain("report.md created");
+    expect(screen.getAllByTestId("hud-recent-output")).toHaveLength(1);
   });
 
   it("says the connection is being re-established while the socket is down", () => {
