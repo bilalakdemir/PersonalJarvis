@@ -19,6 +19,13 @@ function snapshot(overrides: Partial<HudSnapshot> = {}): HudSnapshot {
     connection_state: "CONNECTED",
     voice_state: "IDLE",
     attention: [],
+    project_context: {
+      status: "NO_PROJECT",
+      project_id: null,
+      matched_by: "",
+      detail: "",
+      updated_at_ns: 0,
+    },
     active_project: null,
     active_operations: [],
     recent_outputs: [],
