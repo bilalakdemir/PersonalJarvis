@@ -47,6 +47,9 @@ export interface HudProject {
   project_id: string;
   project_name: string;
   current_task: string | null;
+  phase: string;
+  next_step: string;
+  blockers: string;
   state_revision: string;
   state_valid: boolean;
   issue_codes: string[];
