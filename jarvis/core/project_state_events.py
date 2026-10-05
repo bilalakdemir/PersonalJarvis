@@ -10,6 +10,11 @@ from .events import Event
 class ProjectContextResolved(Event):
     project_id: str = ""
     project_name: str = ""
+    phase: str = ""
+    current_task: str | None = None
+    state_revision: str = ""
+    next_step: str = ""
+    blockers: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +22,9 @@ class ProjectStateLoaded(Event):
     project_id: str = ""
     state_revision: str = ""
     current_task: str | None = None
+    phase: str = ""
+    next_step: str = ""
+    blockers: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +108,9 @@ class ProjectStateCommitted(Event):
     resulting_state_revision: str = ""
     changed_files: tuple[str, ...] = ()
     current_task: str | None = None
+    phase: str = ""
+    next_step: str = ""
+    blockers: str = ""
 
 
 @dataclass(frozen=True, slots=True)
