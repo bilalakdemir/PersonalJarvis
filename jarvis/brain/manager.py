@@ -4738,6 +4738,12 @@ class BrainManager:
             )
         except Exception:  # noqa: BLE001 — project routing must not crash a turn
             log.exception("project context resolution failed unexpectedly")
+            self._publish_project_context_resolved(
+                ProjectContextResolution(
+                    status=ProjectContextResolutionStatus.UNAVAILABLE,
+                    detail="project context resolution failed",
+                )
+            )
             return (
                 "[PROJECT CONTEXT — CANONICAL STATE UNAVAILABLE]\n"
                 "Project context resolution failed. Do not reconstruct or "
