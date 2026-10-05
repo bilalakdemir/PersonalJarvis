@@ -44,12 +44,16 @@ export function parseHudSnapshot(raw: unknown): HudSnapshot | null {
   ]) {
     if (!Array.isArray(raw[key])) return null;
   }
+  if (raw.recent_outputs !== undefined && !Array.isArray(raw.recent_outputs)) return null;
   if (!isRecord(raw.computer_activity)) return null;
   for (const card of raw.approval_requests as unknown[]) {
     if (!isRecord(card)) return null;
     if (typeof card.approval_id !== "string" || card.approval_id.length === 0) return null;
     if (!includes(HUD_APPROVAL_KINDS, card.kind)) return null;
     if (!includes(HUD_DECISION_CHANNELS, card.decision_channel)) return null;
+  }
+  if (raw.recent_outputs === undefined) {
+    return { ...raw, recent_outputs: [] } as unknown as HudSnapshot;
   }
   return raw as unknown as HudSnapshot;
 }
@@ -128,6 +132,7 @@ export interface HudPanels {
   approvals: boolean;
   project: boolean;
   activity: boolean;
+  outputs: boolean;
   computer: boolean;
   memory: boolean;
   error: boolean;
@@ -140,6 +145,7 @@ export function visiblePanels(snapshot: HudSnapshot, nowMs: number): HudPanels {
     approvals: liveApprovals(snapshot, nowMs).length > 0,
     project: snapshot.active_project !== null,
     activity: snapshot.active_operations.length > 0 || snapshot.agent_activity.length > 0,
+    outputs: snapshot.recent_outputs.length > 0,
     computer: Boolean(computer?.active || computer?.screen_capture_active),
     memory: snapshot.memory_activity.length > 0,
     error: snapshot.last_error !== null,
@@ -187,7 +193,11 @@ export function aerionVisualState(
   if (snapshot.primary_state === "ERROR") return "ERROR";
   if (snapshot.primary_state === "WAITING_FOR_APPROVAL") return "WAITING_FOR_APPROVAL";
 
-  const newestCompletedNs = [...snapshot.active_operations, ...snapshot.agent_activity]
+  const newestCompletedNs = [
+    ...snapshot.active_operations,
+    ...snapshot.agent_activity,
+    ...snapshot.recent_outputs,
+  ]
     .filter((item) => item.status === "completed")
     .reduce((latest, item) => Math.max(latest, item.updated_at_ns || item.started_at_ns || 0), 0);
   if (newestCompletedNs > 0) {
