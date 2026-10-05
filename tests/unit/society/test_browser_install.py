@@ -102,7 +102,7 @@ def test_lock_identity_survives_platform_line_endings(installer, monkeypatch, tm
 
 
 def test_browser_candidate_order_prefers_brave_before_chrome() -> None:
-    windows = install._system_browser_paths(  # noqa: SLF001 — pin selection contract
+    brave_windows, chrome_windows = install._system_browser_paths(  # noqa: SLF001
         "win32",
         {
             "ProgramFiles": r"C:\Program Files",
@@ -110,13 +110,15 @@ def test_browser_candidate_order_prefers_brave_before_chrome() -> None:
             "LOCALAPPDATA": r"C:\Users\test\AppData\Local",
         },
     )
-    assert "BraveSoftware" in str(windows[0])
-    assert "BraveSoftware" in str(windows[1])
-    assert "Google" in str(windows[3])
+    assert "BraveSoftware" in str(brave_windows[0])
+    assert "BraveSoftware" in str(brave_windows[1])
+    assert "Google" in str(chrome_windows[0])
 
-    mac = install._system_browser_paths("darwin", {})  # noqa: SLF001 — pin selection contract
-    assert "Brave Browser.app" in str(mac[0])
-    assert "Google Chrome.app" in str(mac[1])
+    brave_mac, chrome_mac = install._system_browser_paths(  # noqa: SLF001
+        "darwin", {}
+    )
+    assert "Brave Browser.app" in str(brave_mac[0])
+    assert "Google Chrome.app" in str(chrome_mac[0])
 
 
 def test_system_browser_path_lookup_prefers_brave(monkeypatch) -> None:
@@ -125,9 +127,25 @@ def test_system_browser_path_lookup_prefers_brave(monkeypatch) -> None:
         "google-chrome": "/opt/google/chrome",
     }
     monkeypatch.setattr(install.shutil, "which", lambda name: found.get(name))
-    monkeypatch.setattr(install, "_system_browser_paths", lambda: ())
+    monkeypatch.setattr(install, "_system_browser_paths", lambda: ((), ()))
 
     assert install.system_browser_executable() == Path("/opt/brave/brave")
+
+
+def test_brave_install_path_beats_chrome_on_path(monkeypatch, tmp_path: Path) -> None:
+    brave = tmp_path / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe"
+    brave.parent.mkdir(parents=True)
+    brave.write_bytes(b"brave")
+    chrome = tmp_path / "google-chrome"
+
+    monkeypatch.setattr(
+        install.shutil,
+        "which",
+        lambda name: str(chrome) if name == "google-chrome" else None,
+    )
+    monkeypatch.setattr(install, "_system_browser_paths", lambda: ((brave,), ()))
+
+    assert install.system_browser_executable() == brave
 
 
 def test_preferred_browser_falls_back_to_managed_chromium(monkeypatch, tmp_path: Path) -> None:
