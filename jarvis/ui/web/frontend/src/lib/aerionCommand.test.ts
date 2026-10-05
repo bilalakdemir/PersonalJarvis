@@ -45,26 +45,28 @@ afterEach(() => {
 
 describe("stageChatFiles", () => {
   it("uses the existing chat drop intake and the active text thread", async () => {
-    let body: FormData | null = null;
-    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe("/api/chat/drop");
       expect(init?.method).toBe("POST");
-      body = init?.body as FormData;
       return {
         ok: true,
         status: 200,
         json: async () => ({ dispatched: true, files: ["report.pdf"] }),
       } as Response;
-    }) as unknown as typeof fetch;
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const names = await stageChatFiles([
       new File(["report"], "report.pdf", { type: "application/pdf" }),
     ]);
 
     expect(names).toEqual(["report.pdf"]);
-    expect(body?.get("thread_id")).toBe("thread-7");
-    expect(body?.get("surface")).toBe("aerion");
-    const staged = body?.getAll("files") ?? [];
+    const body = fetchMock.mock.calls[0]?.[1]?.body;
+    expect(body).toBeInstanceOf(FormData);
+    const form = body as FormData;
+    expect(form.get("thread_id")).toBe("thread-7");
+    expect(form.get("surface")).toBe("aerion");
+    const staged = form.getAll("files");
     expect(staged).toHaveLength(1);
     expect((staged[0] as File).name).toBe("report.pdf");
   });
