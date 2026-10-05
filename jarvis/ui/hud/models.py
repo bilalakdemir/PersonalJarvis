@@ -51,6 +51,14 @@ ACTIVITY_STATUSES: Final[tuple[str, ...]] = ("running", "completed", "failed", "
 HudErrorScope = Literal["global", "operation", "agent", "project", "component"]
 ERROR_SCOPES: Final[tuple[str, ...]] = ("global", "operation", "agent", "project", "component")
 
+ProjectContextStatus = Literal["RESOLVED", "NO_PROJECT", "AMBIGUOUS", "UNAVAILABLE"]
+PROJECT_CONTEXT_STATUSES: Final[tuple[str, ...]] = (
+    "RESOLVED",
+    "NO_PROJECT",
+    "AMBIGUOUS",
+    "UNAVAILABLE",
+)
+
 #: How the user can answer an approval card. The HUD never answers anything
 #: itself — this names the EXISTING channel that owns the decision.
 #:
@@ -80,6 +88,21 @@ DECISION_CHANNELS: Final[tuple[str, ...]] = (
 
 ApprovalKind = Literal["tool_call", "project_state", "memory_promotion"]
 APPROVAL_KINDS: Final[tuple[str, ...]] = ("tool_call", "project_state", "memory_promotion")
+
+
+@dataclass(frozen=True, slots=True)
+class HudProjectContext:
+    """Current turn's structural project-resolution result.
+
+    This does not choose a project and is not an execution authority. It is a
+    bounded projection of ProjectTurnContext's latest resolution.
+    """
+
+    status: ProjectContextStatus = "NO_PROJECT"
+    project_id: str | None = None
+    matched_by: str = ""
+    detail: str = ""
+    updated_at_ns: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +225,7 @@ class HudSnapshot:
     #: ``primary_state`` (Jarvis SPEAKING while an approval waits):
     #: ``approval`` / ``working`` / ``error``.
     attention: tuple[str, ...] = ()
+    project_context: HudProjectContext = field(default_factory=HudProjectContext)
     active_project: HudProject | None = None
     active_operations: tuple[HudActivity, ...] = ()
     recent_outputs: tuple[HudActivity, ...] = ()
@@ -239,6 +263,7 @@ __all__ = [
     "ERROR_SCOPES",
     "HUD_SCHEMA_VERSION",
     "PRIMARY_STATES",
+    "PROJECT_CONTEXT_STATUSES",
     "ApprovalDecisionChannel",
     "ApprovalKind",
     "HudActivity",
@@ -250,6 +275,8 @@ __all__ = [
     "HudErrorScope",
     "HudMemoryActivity",
     "HudProject",
+    "HudProjectContext",
     "HudSnapshot",
     "PrimaryHudState",
+    "ProjectContextStatus",
 ]
