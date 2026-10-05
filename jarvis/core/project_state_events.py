@@ -7,6 +7,20 @@ from .events import Event
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectContextResolutionChanged(Event):
+    """One turn's structural project-resolution result.
+
+    This is presentation/observability metadata only. The owning
+    ProjectTurnContext remains authoritative for routing and execution scope.
+    """
+
+    status: str = "NO_PROJECT"
+    project_id: str = ""
+    matched_by: str = ""
+    detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectContextResolved(Event):
     project_id: str = ""
     project_name: str = ""
