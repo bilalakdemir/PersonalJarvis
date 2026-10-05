@@ -1,0 +1,173 @@
+/* ==========================================================================
+ * AERION HUD — immersive command center (replaces every `.aerion-*` rule,
+ * `@keyframes aerion-*` and AERION media rule previously in src/index.css).
+ *
+ * Apply with `node apply-aerion-css.mjs src/index.css` (idempotent), or paste
+ * by hand after deleting the old AERION rules. Needs no Tailwind utilities
+ * except `sr-only`.
+ * ========================================================================== */
+
+.aerion-command-core {
+  --a-bg: #020711;
+  --a-cyan: #19b4ff;
+  --a-cyan-hi: #4fd5ff;
+  --a-ice: #d6f4ff;
+  --a-gold: #ffb547;
+  --a-red: #ff5468;
+  --a-green: #2fe39a;
+  --a-violet: #a594ff;
+  --a-text: #edf5fb;
+  --a-text-2: #c3d3df;
+  --a-muted: #8ba6ba;
+  --a-dim: #5d7a90;
+  --a-line: rgba(36, 166, 245, 0.55);
+  --a-line-soft: rgba(60, 146, 214, 0.17);
+  --a-font: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --a-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-title: clamp(13px, min(1.05vw, 1.9vh), 20px);
+  --fs-row: clamp(11.5px, min(0.9vw, 1.62vh), 16.5px);
+  --fs-sub: clamp(10.5px, min(0.78vw, 1.4vh), 14.5px);
+  --fs-meta: clamp(10.5px, min(0.8vw, 1.44vh), 14.5px);
+  --fs-small: clamp(9.5px, min(0.68vw, 1.24vh), 12.5px);
+  --pad: clamp(11px, 1.2vw, 22px);
+  --gap: clamp(8px, 1.28vh, 14px);
+  --tile: clamp(30px, min(2.65vw, 4.7vh), 48px);
+  --tile-sm: clamp(20px, min(1.6vw, 2.85vh), 30px);
+  --radius: clamp(9px, 0.75vw, 13px);
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  color: var(--a-text);
+  font-family: var(--a-font);
+  font-feature-settings: "tnum" 1, "cv11" 1;
+  -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(ellipse 46% 58% at 50% 44%, rgba(12, 78, 156, 0.3), transparent 70%),
+    radial-gradient(circle at 50% 44%, rgba(255, 160, 60, 0.07), transparent 26%),
+    radial-gradient(ellipse 120% 80% at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.55)),
+    linear-gradient(rgba(26, 132, 214, 0.03) 1px, transparent 1px) 0 0 / 44px 44px,
+    linear-gradient(90deg, rgba(26, 132, 214, 0.03) 1px, transparent 1px) 0 0 / 44px 44px,
+    var(--a-bg);
+}
+
+.aerion-command-core *,
+.aerion-command-core *::before,
+.aerion-command-core *::after { box-sizing: border-box; }
+
+:where(.aerion-command-core) :where(button) {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.aerion-command-core button:focus-visible,
+.aerion-command-core summary:focus-visible {
+  outline: 2px solid var(--a-cyan-hi);
+  outline-offset: 2px;
+}
+
+.aerion-command-core svg { flex-shrink: 0; }
+
+.aerion-shell {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: #020711;
+}
+.aerion-shell .jarvis-section-stage {
+  min-height: 0;
+  overflow: hidden;
+  background: #020711;
+}
+.aerion-loading { align-items: center; justify-content: center; gap: 18px; }
+.aerion-loading-core { width: min(56vh, 70vw); aspect-ratio: 1; opacity: 0.55; }
+.aerion-loading-core .aerion-core-rings { width: 100%; height: 100%; }
+.aerion-loading-status {
+  color: var(--a-muted);
+  font-size: var(--fs-row);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.aerion-global-header {
+  position: relative;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  height: clamp(50px, min(3.85vw, 6.8vh), 74px);
+  flex: 0 0 auto;
+  gap: clamp(6px, 0.6vw, 14px);
+  padding: 0 clamp(12px, 1.1vw, 22px);
+  border-bottom: 1px solid rgba(30, 150, 240, 0.32);
+  background: linear-gradient(180deg, rgba(3, 12, 22, 0.98), rgba(2, 9, 17, 0.96));
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+.aerion-global-header::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 2%, rgba(40, 180, 255, 0.55) 22%, rgba(40, 180, 255, 0.2) 50%, rgba(40, 180, 255, 0.55) 78%, transparent 98%);
+  pointer-events: none;
+}
+.aerion-header-left,.aerion-header-right { display:flex; min-width:0; align-items:center; }
+.aerion-header-left { gap: clamp(10px, 1.55vw, 44px); }
+.aerion-header-right { justify-content:flex-end; gap: clamp(6px, 0.62vw, 14px); }
+.aerion-brand-lockup { display:flex; flex:0 0 auto; align-items:center; gap:clamp(8px,1vw,18px); }
+.aerion-mark { width:clamp(24px,2.05vw,38px); height:clamp(24px,2.05vw,38px); filter:drop-shadow(0 0 8px rgba(20,170,255,.65)); }
+.aerion-wordmark { color:#f1f8ff; font-size:clamp(14px,1.16vw,23px); font-weight:400; letter-spacing:.3em; line-height:1; text-shadow:0 0 18px rgba(80,190,255,.35); }
+.aerion-topnav { display:flex; min-width:0; align-items:center; gap:clamp(2px,.24vw,8px); overflow-x:auto; scrollbar-width:none; }
+.aerion-topnav::-webkit-scrollbar { display:none; }
+.aerion-topnav-button {
+  display:inline-flex; flex:0 0 auto; height:clamp(28px,min(2.15vw,3.9vh),40px); align-items:center;
+  gap:clamp(4px,.36vw,8px); padding:0 clamp(6px,.5vw,13px); border:1px solid transparent;
+  border-radius:clamp(8px,.65vw,12px); color:#dce8f1; background:transparent;
+  font-size:clamp(11px,.81vw,16px); font-weight:450; white-space:nowrap;
+  transition:border-color 150ms ease,background 150ms ease,color 150ms ease;
+}
+.aerion-topnav-button svg { width:clamp(13px,.92vw,17px); height:clamp(13px,.92vw,17px); color:#c6dbea; }
+.aerion-topnav-button.is-primary {
+  padding:0 clamp(8px,.8vw,16px); border-color:rgba(44,178,255,.75); color:#36c2ff;
+  background:linear-gradient(180deg,rgba(20,110,210,.3),rgba(10,60,120,.22));
+  box-shadow:0 0 14px rgba(20,150,255,.35),inset 0 0 10px rgba(40,170,255,.18);
+}
+.aerion-topnav-button.is-primary svg { color:#36c2ff; }
+.aerion-topnav-button:hover,.aerion-topnav-button:focus-visible {
+  border-color:rgba(44,178,255,.5); color:#fff; background:rgba(20,130,230,.12);
+}
+.aerion-header-core {
+  position:relative; align-self:stretch; display:grid; min-width:0; justify-items:center; align-content:start;
+  padding-top:clamp(8px,1.75vh,20px); text-align:center; pointer-events:none;
+}
+.aerion-header-core::before {
+  content:""; position:absolute; z-index:-1; top:100%; left:50%; width:clamp(280px,26vw,500px);
+  height:clamp(20px,2.9vh,32px); transform:translateX(-50%);
+  clip-path:polygon(0 0,100% 0,92% 100%,8% 100%);
+  background:linear-gradient(180deg,rgba(2,9,17,.98),rgba(2,10,19,.96));
+}
+.aerion-header-core::after {
+  content:""; position:absolute; z-index:-1; top:calc(100% - 1px); left:50%; width:clamp(280px,26vw,500px);
+  height:clamp(20px,2.9vh,32px); transform:translateX(-50%);
+  background:
+    linear-gradient(90deg,transparent 8%,rgba(40,180,255,.7) 8.2%,rgba(40,180,255,.7) 91.8%,transparent 92%) bottom/100% 1px no-repeat,
+    linear-gradient(to bottom right,transparent calc(50% - .7px),rgba(40,180,255,.75) 50%,transparent calc(50% + .7px)) left/8% 100% no-repeat,
+    linear-gradient(to bottom left,transparent calc(50% - .7px),rgba(40,180,255,.75) 50%,transparent calc(50% + .7px)) right/8% 100% no-repeat;
+  filter:drop-shadow(0 0 4px rgba(30,170,255,.6));
+}
+.aerion-header-core span { color:#22b0ff; font-size:clamp(9px,.74vw,13px); font-weight:500; letter-spacing:.26em; }
+.aerion-header-core strong {
+  margin-top:clamp(1px,.3vh,4px); color:#f3f9ff; font-size:clamp(20px,min(1.95vw,3.5vh),36px);
+  font-weight:300; letter-spacing:.3em; line-height:1; padding-left:.3em;
+  text-shadow:0 0 22px rgba(60,180,255,.55),0 0 2px rgba(255,255,255,.5);
+}
+.aerion-header-core small {
+  position:absolute; top:calc(100% + clamp(3px,.55vh,7px)); left:50%; transform:translateX(-50%);
+  padding-left:.27em; color:#c8d8e6; font-size:clamp(8.5px,.74vw,13px); letter-spacing:.27em; white-space:nowrap;
+}
