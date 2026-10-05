@@ -1421,20 +1421,22 @@ class HudReducer:
         if not project_id:
             return False
         changed = self._on_project_transaction_closed(event)
-        return (
-            self._write_project(
-                project_id,
-                _ts(event),
-                current_task=_opt(event.current_task, DETAIL_CHARS),
-                phase=_safe(event.phase, LABEL_CHARS),
-                next_step=_safe(event.next_step, MESSAGE_CHARS),
-                blockers=_safe(event.blockers, MESSAGE_CHARS),
-                state_revision=_safe(event.resulting_state_revision, LABEL_CHARS),
-                state_valid=True,
-                issue_codes=(),
-            )
-            or changed
-        )
+        changes: dict[str, Any] = {
+            "current_task": _opt(event.current_task, DETAIL_CHARS),
+            "state_revision": _safe(event.resulting_state_revision, LABEL_CHARS),
+            "state_valid": True,
+            "issue_codes": (),
+        }
+        phase = _safe(event.phase, LABEL_CHARS)
+        next_step = _safe(event.next_step, MESSAGE_CHARS)
+        blockers = _safe(event.blockers, MESSAGE_CHARS)
+        if phase:
+            changes["phase"] = phase
+        if next_step:
+            changes["next_step"] = next_step
+        if blockers:
+            changes["blockers"] = blockers
+        return self._write_project(project_id, _ts(event), **changes) or changed
 
     # ---------------------------------------------------------- computer use
     def _on_cu_started(self, event: CUControlStarted) -> bool:
