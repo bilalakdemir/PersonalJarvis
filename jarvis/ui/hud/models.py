@@ -204,6 +204,7 @@ class HudSnapshot:
     attention: tuple[str, ...] = ()
     active_project: HudProject | None = None
     active_operations: tuple[HudActivity, ...] = ()
+    recent_outputs: tuple[HudActivity, ...] = ()
     approval_requests: tuple[HudApproval, ...] = ()
     agent_activity: tuple[HudActivity, ...] = ()
     memory_activity: tuple[HudMemoryActivity, ...] = ()
