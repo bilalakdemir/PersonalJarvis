@@ -2,8 +2,9 @@
  * AERION command-center chrome: header, stage frame, mode / system readouts,
  * capability rails, pedestal and command dock.
  *
- * Purely presentational. Everything shown is passed in from HudView, which
- * reads it from the canonical HudSnapshot and the event store.
+ * Most chrome remains presentational. The command dock is the intentional
+ * exception: it is a thin action surface over the existing chat/drop/dictation
+ * and mission/task-cancel paths, without owning a second runtime state model.
  */
 import {
   memo,
