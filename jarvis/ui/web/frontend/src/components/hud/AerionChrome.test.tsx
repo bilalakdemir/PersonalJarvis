@@ -98,7 +98,9 @@ describe("AERION CommandDock", () => {
       payload: { mode: "start" },
     });
 
-    useEventStore.getState().commitDictation("dictated command");
+    act(() => {
+      useEventStore.getState().commitDictation("dictated command");
+    });
     expect((screen.getByTestId("aerion-command-input") as HTMLInputElement).value).toBe(
       "dictated command",
     );
