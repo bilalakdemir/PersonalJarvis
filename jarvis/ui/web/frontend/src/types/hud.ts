@@ -133,6 +133,7 @@ export interface HudSnapshot {
   attention: string[];
   active_project: HudProject | null;
   active_operations: HudActivity[];
+  recent_outputs: HudActivity[];
   approval_requests: HudApproval[];
   agent_activity: HudActivity[];
   memory_activity: HudMemoryActivity[];
@@ -152,6 +153,7 @@ export const HUD_SNAPSHOT_KEYS = [
   "attention",
   "active_project",
   "active_operations",
+  "recent_outputs",
   "approval_requests",
   "agent_activity",
   "memory_activity",
