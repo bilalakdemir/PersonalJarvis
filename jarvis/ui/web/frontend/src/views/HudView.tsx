@@ -1,54 +1,54 @@
 /**
  * AERION immersive command center.
  *
- * This view is only a projection of existing stores/snapshots. It owns no
- * second backend, chat, task, agent or approval state.
+ * A projection of existing stores only: the canonical HudSnapshot
+ * (`useHudStore`) and the event store (`useEventStore`). It owns no second
+ * backend, chat, task, agent or approval state; local state here is purely
+ * presentational (panel filters).
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import {
-  Activity,
-  Bot,
-  Brain,
-  CalendarDays,
-  CheckCircle2,
-  FolderKanban,
-  Mail,
-  MessageCircle,
-  Paperclip,
-  Send,
-  Settings,
-  ShieldCheck,
-  Sparkles,
-  Target,
-  Volume2,
-  Wrench,
-  Zap,
-  BookOpen,
-  BrainCircuit,
-} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
-import { Reactor } from "@/components/hud/Reactor";
+import "@/aerion-hud.css";
+
+import {
+  AerionHeader,
+  CapabilityRail,
+  CommandDock,
+  ModeReadout,
+  Pedestal,
+  StageFrame,
+  SystemStatus,
+  capabilityIcons,
+  type StatusLine,
+} from "@/components/hud/AerionChrome";
+import { useAerionCopy } from "@/components/hud/aerionCopy";
+import { CoreRings } from "@/components/hud/CoreRings";
 import {
   ActivityPanel,
   ApprovalsPanel,
-  ComputerPanel,
-  ErrorPanel,
+  ConversationPanel,
   MemoryPanel,
-  ProjectPanel,
+  SystemPanel,
+  TodayPanel,
   tr,
 } from "@/components/hud/HudPanels";
-import { useT } from "@/i18n";
+import { Reactor } from "@/components/hud/Reactor";
+import { useUiLanguage } from "@/i18n";
+import { clockFormatter, formatHeaderDate, nsToMs } from "@/lib/aerionPresentation";
 import {
   REACTOR_STYLES,
   aerionVisualState,
   effectiveConnection,
   liveApprovals,
   visiblePanels,
+  type AerionVisualState,
 } from "@/lib/hudSemantics";
-import { useEventStore, type SectionId } from "@/store/events";
+import { useEventStore } from "@/store/events";
 import { refreshHudSnapshot, useHudStore } from "@/store/hud";
 
 const CLOCK_TICK_MS = 1000;
+const LEARN_WINDOW_MS = 30_000;
+const NO_ATTENTION: readonly string[] = [];
 
 function useNow(): number {
   const [now, setNow] = useState(() => Date.now());
@@ -59,53 +59,13 @@ function useNow(): number {
   return now;
 }
 
-function NavButton({
-  icon,
-  label,
-  section,
-  active,
-  onSelect,
-}: {
-  icon: ReactNode;
-  label: string;
-  section: SectionId;
-  active?: boolean;
-  onSelect: (section: SectionId) => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={`aerion-topnav-button${active ? " is-active" : ""}`}
-      onClick={() => onSelect(section)}
-    >
-      <span aria-hidden>{icon}</span>
-      <span>{label}</span>
-    </button>
-  );
-}
-
-function EmptyIntelPanel({
-  icon,
-  title,
-  message,
-}: {
-  icon: ReactNode;
-  title: string;
-  message: string;
-}) {
-  return (
-    <section className="aerion-intel-panel aerion-empty-panel">
-      <header>
-        <span aria-hidden>{icon}</span>
-        <strong>{title}</strong>
-      </header>
-      <p>{message}</p>
-    </section>
-  );
+function capitalize(value: string): string {
+  return value ? value.charAt(0).toUpperCase() + value.slice(1).toLowerCase() : value;
 }
 
 export function HudView() {
-  const t = useT();
+  const { say, t } = useAerionCopy();
+  const locale = useUiLanguage();
   const snapshot = useHudStore((s) => s.snapshot);
   const hadSnapshot = useHudStore((s) => s.hadSnapshot);
   const connected = useEventStore((s) => s.connected);
@@ -119,18 +79,33 @@ export function HudView() {
   }, []);
 
   const connection = effectiveConnection(connected, warming, hadSnapshot);
-  const conversation = useMemo(
-    () => messages.filter((m) => m.role === "user" || m.role === "assistant").slice(-3),
-    [messages],
+  const connectionLabel = t(`hud.connection.${connection.toLowerCase()}`);
+  const clock = useMemo(() => clockFormatter(locale), [locale]);
+  const dateLabel = formatHeaderDate(nowMs, locale);
+  const timeLabel = clock.format(nowMs);
+
+  // Stable identity for the memoised Reactor (re-renders every clock tick otherwise).
+  const attentionKey = snapshot
+    ? snapshot.attention.map((flag) => tr(t, `hud.attention.${flag}`, flag)).join("\u0000")
+    : "";
+  const attention = useMemo(
+    () => (attentionKey ? attentionKey.split("\u0000") : NO_ATTENTION),
+    [attentionKey],
   );
 
   if (snapshot === null) {
     return (
-      <div className="aerion-command-core aerion-loading" data-testid="hud-view">
-        <p role="status">
-          {connection === "CONNECTED"
-            ? t("hud.loading")
-            : t(`hud.connection.${connection.toLowerCase()}`)}
+      <div
+        className="aerion-command-core aerion-loading"
+        data-testid="hud-view"
+        data-connection-state={connection}
+        data-aerion-state="OFF"
+      >
+        <div className="aerion-loading-core" aria-hidden>
+          <CoreRings pattern="dotted" />
+        </div>
+        <p role="status" className="aerion-loading-status">
+          {connection === "CONNECTED" ? t("hud.loading") : connectionLabel}
         </p>
       </div>
     );
@@ -140,17 +115,81 @@ export function HudView() {
   const approvals = liveApprovals(snapshot, nowMs);
   const style = REACTOR_STYLES[snapshot.primary_state];
   const stateLabel = t(style.labelKey);
-  const attention = snapshot.attention.map((flag) =>
-    tr(t, `hud.attention.${flag}`, flag),
-  );
-  const coreState = aerionVisualState(snapshot, connection, nowMs);
-  const coreStateLabel = coreState.replaceAll("_", " ");
+  const coreState: AerionVisualState = aerionVisualState(snapshot, connection, nowMs);
+  const coreStateLabel = say(`state.${coreState}`);
   const quiet = !Object.values(panels).some(Boolean);
-  const activeOps = [...snapshot.agent_activity, ...snapshot.active_operations];
-  const runningCount = activeOps.filter((item) => item.status === "running").length;
+  const runningCount = [...snapshot.active_operations, ...snapshot.agent_activity].filter(
+    (item) => item.status === "running",
+  ).length;
   const agentCount = snapshot.agent_activity.length;
-  const headerTime = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(nowMs);
-  const headerDate = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "2-digit", month: "short" }).format(nowMs);
+  const voiceState = snapshot.voice_state ? capitalize(snapshot.voice_state.replaceAll("_", " ")) : "—";
+
+  const modeDetail =
+    coreState === "ERROR" && snapshot.last_error?.message
+      ? snapshot.last_error.message
+      : say(`mode.${coreState}`);
+
+  const headline: StatusLine =
+    connection !== "CONNECTED"
+      ? { label: say("status.degraded"), tone: connection === "DISCONNECTED" ? "red" : "gold" }
+      : snapshot.primary_state === "ERROR"
+        ? { label: say("status.attention"), tone: "red" }
+        : approvals.length > 0 || snapshot.attention.length > 0
+          ? { label: say("status.attention"), tone: "gold" }
+          : { label: say("status.nominal"), tone: "green" };
+  const statusLines: StatusLine[] = [
+    {
+      label: say("status.stream"),
+      value: connectionLabel,
+      tone: connection === "CONNECTED" ? "green" : connection === "RECONNECTING" ? "gold" : "red",
+    },
+    {
+      label: say("status.voice"),
+      value: voiceState,
+      tone: snapshot.voice_state === "error" ? "red" : "cyan",
+    },
+    {
+      label: say("status.attention_flags"),
+      value: String(snapshot.attention.length),
+      tone: snapshot.attention.length > 0 ? "gold" : "green",
+    },
+  ];
+
+  const newestMemoryMs = snapshot.memory_activity.reduce(
+    (latest, item) => Math.max(latest, nsToMs(item.at_ns) ?? 0),
+    0,
+  );
+  const icons = capabilityIcons();
+  const leftCaps = [
+    { key: "listen", label: say("capability.listen"), icon: icons.listen, active: coreState === "LISTENING" },
+    { key: "think", label: say("capability.think"), icon: icons.think, active: coreState === "THINKING" },
+    {
+      key: "process",
+      label: say("capability.process"),
+      icon: icons.process,
+      active: coreState === "WORKING",
+    },
+  ];
+  const rightCaps = [
+    {
+      key: "learn",
+      label: say("capability.learn"),
+      icon: icons.learn,
+      active: newestMemoryMs > 0 && nowMs - newestMemoryMs <= LEARN_WINDOW_MS,
+    },
+    {
+      key: "plan",
+      label: say("capability.plan"),
+      icon: icons.plan,
+      active: coreState === "WAITING_FOR_APPROVAL" || Boolean(snapshot.active_project?.current_task),
+    },
+    {
+      key: "execute",
+      label: say("capability.execute"),
+      icon: icons.execute,
+      active: coreState === "SPEAKING" || snapshot.computer_activity.active,
+    },
+  ];
 
   return (
     <div
@@ -161,193 +200,85 @@ export function HudView() {
       data-aerion-state={coreState}
     >
       {quiet ? (
-        <span className="sr-only" data-testid="hud-quiet">{t("hud.quiet")}</span>
+        <span className="sr-only" data-testid="hud-quiet">
+          {t("hud.quiet")}
+        </span>
       ) : null}
-      <header className="aerion-global-header">
-        <div className="aerion-header-left">
-          <div className="aerion-brand-lockup">
-            <div className="aerion-brand-mark" aria-hidden>A</div>
-            <div>
-              <div className="aerion-wordmark" data-testid="aerion-wordmark">AERION</div>
-              <div className="aerion-brand-subtitle">PERSONAL INTELLIGENCE SYSTEM</div>
-            </div>
-          </div>
 
-          <nav className="aerion-topnav" aria-label="AERION">
-            <NavButton icon={<MessageCircle />} label="Chat" section="chats" onSelect={setActiveSection} />
-            <NavButton icon={<FolderKanban />} label="Projects" section="chat-workspace" onSelect={setActiveSection} />
-            <NavButton icon={<Bot />} label="Agents" section="agents" onSelect={setActiveSection} />
-            <NavButton icon={<Brain />} label="Memory" section="memory" onSelect={setActiveSection} />
-            <NavButton icon={<Wrench />} label="Tools" section="plugins" onSelect={setActiveSection} />
-          </nav>
-        </div>
-
-        <div className="aerion-header-core">
-          <span>AERION CORE</span>
-          <strong>AERION</strong>
-          <small>PERSONAL INTELLIGENCE SYSTEM</small>
-        </div>
-
-        <div className="aerion-header-right">
-          <div className="aerion-status-pill">
-            <span className="aerion-status-dot" aria-hidden />
-            <span>{connection === "CONNECTED" ? "ONLINE" : connection}</span>
-          </div>
-          <div className="aerion-runtime-chip"><span>AGENTS</span><strong>{agentCount}</strong></div>
-          <div className="aerion-runtime-chip"><span>TASKS</span><strong>{runningCount}</strong></div>
-          <div className="aerion-clock">
-            <strong>{headerDate}</strong>
-            <span>{headerTime}</span>
-          </div>
-          <div className="aerion-header-status" data-testid="hud-status-line">
-            <span>{coreStateLabel}</span>
-            <span className="aerion-status-divider">·</span>
-            <span>{t(`hud.connection.${connection.toLowerCase()}`)}</span>
-          </div>
-          <button type="button" className="aerion-system-button" onClick={() => setActiveSection("settings")} aria-label="System">
-            <Settings aria-hidden />
-          </button>
-        </div>
-      </header>
+      <AerionHeader
+        say={say}
+        connection={connection}
+        connectionLabel={connectionLabel}
+        coreStateLabel={coreStateLabel}
+        voiceState={voiceState}
+        agentCount={agentCount}
+        taskCount={runningCount}
+        dateLabel={dateLabel}
+        timeLabel={timeLabel}
+        onNavigate={setActiveSection}
+      />
 
       <div className="aerion-dashboard-grid" data-testid="aerion-command-grid">
         <aside className="aerion-side-column aerion-left-column" data-testid="aerion-zone-left">
-          {panels.approvals ? (
-            <ApprovalsPanel cards={approvals} t={t} nowMs={nowMs} />
-          ) : (
-            <EmptyIntelPanel
-              icon={<ShieldCheck />}
-              title="YOUR ACTIONS"
-              message="Nothing needs your approval right now."
-            />
-          )}
-
-          {panels.project && snapshot.active_project ? (
-            <ProjectPanel project={snapshot.active_project} t={t} />
-          ) : (
-            <EmptyIntelPanel
-              icon={<CalendarDays />}
-              title="TODAY"
-              message="No active project task is pinned to the command center."
-            />
-          )}
-
-          <EmptyIntelPanel
-            icon={<Mail />}
-            title="INBOX INTELLIGENCE"
-            message="Inbox intelligence will appear here when a connected mail source publishes actionable items."
+          <ApprovalsPanel cards={approvals} t={t} nowMs={nowMs} onViewAll={() => setActiveSection("tasks")} />
+          <TodayPanel
+            snapshot={snapshot}
+            nowMs={nowMs}
+            dateLabel={dateLabel}
+            t={t}
+            onOpenProjects={() => setActiveSection("chat-workspace")}
+          />
+          <ConversationPanel messages={messages}
+            t={t}
+            onOpen={() => setActiveSection("chats")}
           />
         </aside>
 
-        <main className="aerion-center-stage" data-testid="aerion-zone-center">
-          <section className="aerion-core-stage">
-            <div className="aerion-mode-readout">
-              <span>CURRENT MODE</span>
-              <strong>{coreStateLabel}</strong>
-              <small>{stateLabel} · {t(`hud.connection.${connection.toLowerCase()}`)}</small>
-            </div>
-
-            <div className="aerion-system-summary">
-              <span><i /> Core runtime</span>
-              <span><i /> Event stream</span>
-              <span><i /> Memory layer</span>
-            </div>
-
-            <div className="aerion-core-capabilities aerion-core-capabilities-left" aria-hidden>
-              <div><Volume2 /><span>LISTEN</span></div>
-              <div><BrainCircuit /><span>THINK</span></div>
-              <div><Zap /><span>PROCESS</span></div>
-            </div>
-            <div className="aerion-core-capabilities aerion-core-capabilities-right" aria-hidden>
-              <div><BookOpen /><span>LEARN</span></div>
-              <div><Target /><span>PLAN</span></div>
-              <div><Send /><span>EXECUTE</span></div>
-            </div>
-
+        <div className="aerion-center-stage" data-testid="aerion-zone-center">
+          <section className="aerion-core-stage" aria-label={say("brand.core")}>
+            <StageFrame />
+            <ModeReadout say={say} coreState={coreState} stateLabel={coreStateLabel} detail={modeDetail} />
+            <SystemStatus say={say} headline={headline} lines={statusLines} />
+            <CapabilityRail side="left" items={leftCaps} />
+            <CapabilityRail side="right" items={rightCaps} />
+            <Pedestal />
             <Reactor
+              key="aerion-reactor"
               state={snapshot.primary_state}
               label={stateLabel}
               attention={attention}
               visualState={coreState}
             />
-
-            <div className="aerion-core-caption">
-              <strong>AERION CORE</strong>
-              <span>SYNTHESIZE · REASON · PLAN · EXECUTE</span>
+            <div className="aerion-core-caption" aria-hidden>
+              <strong>{say("brand.core")}</strong>
+              <span>{say("brand.caption")}</span>
             </div>
           </section>
 
-          <section className="aerion-command-dock" aria-label="AERION command">
-            <button
-              type="button"
-              className="aerion-command-input"
-              onClick={() => setActiveSection("chats")}
-            >
-              <Sparkles aria-hidden />
-              <span>
-                {conversation.length > 0
-                  ? conversation[conversation.length - 1]?.content
-                  : "Message AERION..."}
-              </span>
-              <Paperclip aria-hidden className="aerion-command-trailing" />
-              <Send aria-hidden />
-            </button>
-            <div className="aerion-quick-actions">
-              {["Deep Research", "Analyze File", "Create Plan", "Work with Agents", "Search Web"].map((label) => (
-                <button key={label} type="button" onClick={() => setActiveSection("chats")}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </section>
-        </main>
+          <CommandDock say={say} onNavigate={setActiveSection} />
+        </div>
 
         <aside className="aerion-side-column aerion-right-column" data-testid="aerion-zone-right">
-          {panels.activity ? (
-            <ActivityPanel
-              operations={snapshot.active_operations}
-              agents={snapshot.agent_activity}
-              t={t}
-            />
-          ) : (
-            <EmptyIntelPanel
-              icon={<Activity />}
-              title={`RUNNING TASKS · ${runningCount}`}
-              message="No task is currently running."
-            />
-          )}
-
-          <EmptyIntelPanel
-            icon={<Bot />}
-            title={`AGENTS · ${agentCount}`}
-            message={
-              agentCount > 0
-                ? "Agent activity is available in the live activity panel."
-                : "No active agent activity is being reported."
-            }
+          <ActivityPanel
+            operations={snapshot.active_operations}
+            agents={snapshot.agent_activity}
+            t={t}
+            nowMs={nowMs}
+            onViewTasks={() => setActiveSection("tasks")}
+            onManageAgents={() => setActiveSection("agents")}
           />
-
-          {panels.memory ? (
-            <MemoryPanel items={snapshot.memory_activity} t={t} />
-          ) : (
-            <EmptyIntelPanel
-              icon={<CheckCircle2 />}
-              title="RECENT OUTPUTS"
-              message="Completed outputs will appear here when the runtime publishes them."
-            />
-          )}
-
-          {panels.error && snapshot.last_error ? (
-            <ErrorPanel error={snapshot.last_error} t={t} />
-          ) : panels.computer ? (
-            <ComputerPanel computer={snapshot.computer_activity} t={t} />
-          ) : (
-            <EmptyIntelPanel
-              icon={<CalendarDays />}
-              title="UPCOMING"
-              message="Upcoming operational items will appear here from connected sources."
-            />
-          )}
+          <MemoryPanel
+            items={snapshot.memory_activity}
+            t={t}
+            nowMs={nowMs}
+            onViewAll={() => setActiveSection("memory")}
+          />
+          <SystemPanel
+            computer={snapshot.computer_activity}
+            error={snapshot.last_error}
+            t={t}
+            onOpenSystem={() => setActiveSection("computers")}
+          />
         </aside>
       </div>
     </div>
