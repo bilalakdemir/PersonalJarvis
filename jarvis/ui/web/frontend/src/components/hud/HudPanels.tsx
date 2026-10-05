@@ -64,6 +64,7 @@ import type {
   HudError,
   HudMemoryActivity,
   HudProject,
+  HudProjectContext,
   HudSnapshot,
 } from "@/types/hud";
 
@@ -496,6 +497,34 @@ export function ProjectPanel({ project, t }: { project: HudProject; t: T }) {
   );
 }
 
+function ProjectContextNotice({
+  context,
+}: {
+  context: HudProjectContext;
+}) {
+  const { say } = useAerionCopy();
+  if (context.status === "RESOLVED") return null;
+
+  const label =
+    context.status === "AMBIGUOUS"
+      ? say("project.context.ambiguous")
+      : context.status === "UNAVAILABLE"
+        ? say("project.context.unavailable")
+        : say("project.context.none");
+
+  return (
+    <div
+      className="aerion-project-context-notice"
+      data-status={context.status}
+      data-testid="hud-project-context"
+      title={context.detail || undefined}
+    >
+      <FolderKanban aria-hidden />
+      <span>{label}</span>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------- today
 
 export function TodayPanel({
@@ -539,7 +568,10 @@ export function TodayPanel({
         </>
       }
     >
-      {snapshot.active_project ? <ProjectPanel project={snapshot.active_project} t={t} /> : null}
+      <ProjectContextNotice context={snapshot.project_context} />
+      {snapshot.project_context.status === "RESOLVED" && snapshot.active_project ? (
+        <ProjectPanel project={snapshot.active_project} t={t} />
+      ) : null}
       <ol className="aerion-timeline aerion-scroll">
         <li className="is-now" data-tone="cyan">
           <time>{clock(nowMs)}</time>
