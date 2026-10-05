@@ -9,6 +9,7 @@ import { useVoiceStateResync } from "@/hooks/useVoiceStateResync";
 import { useAssistantNameSeed } from "@/hooks/useAssistantNameSeed";
 import { useCodingMode } from "@/hooks/useCodingMode";
 import { useFileDropGuard } from "@/hooks/useFileDropGuard";
+import { useAerionProactive } from "@/hooks/useAerionProactive";
 import { useSectionUrlMemory } from "@/hooks/useSectionUrlMemory";
 import {
   Sidebar,
@@ -126,6 +127,8 @@ export function SectionStage({
 }
 
 export default function App() {
+  const solo = useEventStore((s) => s.solo);
+
   /*
     `?` opens the shortcut overlay. Registered here rather than per view so it
     works everywhere, and guarded by shouldOpenShortcutOverlay so it never eats
@@ -150,6 +153,7 @@ export default function App() {
   useAssistantNameSeed();
   useCodingMode();
   useFileDropGuard();
+  useAerionProactive(!solo);
   /*
    * A reload puts the user back on the section they were on.
    *
@@ -278,7 +282,6 @@ export default function App() {
   const agentsNavOpen = useSocietyShell((s) => s.navigationOpen);
   const toggleAgentsNav = useSocietyShell((s) => s.toggleNavigation);
   const hideNavigation = activeSection === "hud" || (activeSection === "agents" && !agentsNavOpen);
-  const solo = useEventStore((s) => s.solo);
   const detachedViews = useEventStore((s) => s.detachedViews);
   /*
    * The caption's leading navigation (sidebar toggle beside back/forward).
