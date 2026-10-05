@@ -614,7 +614,12 @@ class _GuardedCodexLoginProcess:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             status = cls._read_status(acknowledgement)
-            if status == "ready":
+            if status in {"ready", "finished"}:
+                # "finished" is a stronger ownership proof than "ready": the
+                # guardian acquired the profile lock, launched the login child,
+                # and the child exited before this polling loop observed the
+                # transient ready state. The guardian still retains the profile
+                # lock until the parent publishes the explicit release control.
                 return
             if status == "busy":
                 raise RuntimeError(

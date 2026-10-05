@@ -2,10 +2,20 @@
  * AERION command-center chrome: header, stage frame, mode / system readouts,
  * capability rails, pedestal and command dock.
  *
- * Purely presentational. Everything shown is passed in from HudView, which
- * reads it from the canonical HudSnapshot and the event store.
+ * Most chrome remains presentational. The command dock is the intentional
+ * exception: it is a thin action surface over the existing chat/drop/dictation
+ * and mission/task-cancel paths, without owning a second runtime state model.
  */
-import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  memo,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   AudioLines,
   Bot,
@@ -26,16 +36,20 @@ import {
   Search,
   Send,
   Settings,
+  Square,
   Target,
   Users,
   Wrench,
 } from "lucide-react";
 
 import type { AerionSay } from "@/components/hud/aerionCopy";
+import { getWSClient } from "@/hooks/useWebSocket";
+import { cancelHudTarget, resolveHudCancelTarget, stageChatFiles } from "@/lib/aerionCommand";
+import { sendChatMessage } from "@/lib/chat";
 import type { AerionVisualState } from "@/lib/hudSemantics";
 import { cn } from "@/lib/utils";
-import type { SectionId } from "@/store/events";
-import type { HudConnectionState } from "@/types/hud";
+import { useEventStore, type SectionId } from "@/store/events";
+import type { HudActivity, HudConnectionState } from "@/types/hud";
 
 type Navigate = (section: SectionId) => void;
 
@@ -430,8 +444,149 @@ export const Pedestal = memo(function Pedestal() {
   );
 });
 
-export function CommandDock({ say, onNavigate }: { say: AerionSay; onNavigate: Navigate }) {
-  const open = () => onNavigate("chats");
+export function CommandDock({
+  say,
+  onNavigate,
+  operations,
+}: {
+  say: AerionSay;
+  onNavigate: Navigate;
+  operations: HudActivity[];
+}) {
+  const connected = useEventStore((s) => s.connected);
+  const wsWarming = useEventStore((s) => s.wsWarming);
+  const dictating = useEventStore((s) => s.dictating);
+  const dictationText = useEventStore((s) => s.dictationText);
+  const dictationCommitSeq = useEventStore((s) => s.dictationCommitSeq);
+  const setDictating = useEventStore((s) => s.setDictating);
+  const pushToast = useEventStore((s) => s.pushToast);
+
+  const [value, setValue] = useState("");
+  const [stagedFiles, setStagedFiles] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dictationBaseRef = useRef("");
+  const mirroringRef = useRef(false);
+  const lastCommitSeqRef = useRef(dictationCommitSeq);
+
+  useEffect(() => {
+    if (!dictating || !mirroringRef.current) return;
+    const base = dictationBaseRef.current;
+    const sep = base && dictationText ? " " : "";
+    setValue(base + sep + dictationText);
+  }, [dictating, dictationText]);
+
+  useEffect(() => {
+    if (dictationCommitSeq === lastCommitSeqRef.current) return;
+    lastCommitSeqRef.current = dictationCommitSeq;
+    const finalText = useEventStore.getState().dictationCommitText;
+    setValue((current) => {
+      const base = mirroringRef.current ? dictationBaseRef.current : current;
+      const sep = base && finalText ? " " : "";
+      return base + sep + finalText;
+    });
+    mirroringRef.current = false;
+  }, [dictationCommitSeq]);
+
+  function startDictation() {
+    dictationBaseRef.current = value;
+    mirroringRef.current = true;
+    setDictating(true);
+    getWSClient()?.send({
+      type: "command",
+      action: "stt_dictate",
+      payload: { mode: "start" },
+    });
+  }
+
+  function stopDictation() {
+    getWSClient()?.send({
+      type: "command",
+      action: "stt_dictate",
+      payload: { mode: "stop" },
+    });
+    setDictating(false);
+  }
+
+  function toggleDictation() {
+    if (!connected) return;
+    if (dictating) stopDictation();
+    else startDictation();
+  }
+
+  async function submit() {
+    const text = value.trim();
+    if (!text || !connected || sending || uploading) return;
+    if (dictating) stopDictation();
+
+    setSending(true);
+    try {
+      const sent = await sendChatMessage(text);
+      if (!sent) {
+        pushToast("warning", say("command.send_unavailable"));
+        return;
+      }
+      setValue("");
+      setStagedFiles([]);
+    } catch {
+      pushToast("error", say("command.send_failed"));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function attachFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (files.length === 0 || uploading) return;
+
+    setUploading(true);
+    try {
+      const names = await stageChatFiles(files);
+      setStagedFiles((current) => [...current, ...names]);
+    } catch {
+      pushToast("error", say("command.attach_failed"));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  const cancelResolution = resolveHudCancelTarget(operations);
+
+  async function stopActiveWork() {
+    const target = cancelResolution.target;
+    if (!target || cancelling) return;
+    setCancelling(true);
+    try {
+      await cancelHudTarget(target);
+      pushToast("success", say("command.stop_requested"));
+    } catch {
+      pushToast("error", say("command.stop_failed"));
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    void submit();
+  }
+
+  const canSend = connected && Boolean(value.trim()) && !uploading && !sending;
+  const placeholder = !connected
+    ? wsWarming
+      ? say("command.booting")
+      : say("command.offline")
+    : dictating
+      ? say("command.listening")
+      : stagedFiles.length > 0
+        ? say("command.with_files")
+        : say("command.placeholder");
+
   const quick: Array<{ key: string; label: string; icon: ReactNode; section: SectionId }> = [
     { key: "research", label: say("quick.research"), icon: <ScanSearch />, section: "chats" },
     { key: "analyze", label: say("quick.analyze"), icon: <FileSearch />, section: "chats" },
@@ -440,41 +595,87 @@ export function CommandDock({ say, onNavigate }: { say: AerionSay; onNavigate: N
     { key: "search", label: say("quick.search"), icon: <Search />, section: "chats" },
     { key: "more", label: say("quick.more"), icon: <MoreHorizontal />, section: "jarvis-actions" },
   ];
+
   return (
     <section className="aerion-command-dock" aria-label={say("command.open")}>
-      <div className="aerion-command">
-        <button
-          type="button"
+      <div className="aerion-command" data-dictating={dictating ? "true" : "false"}>
+        <span className="aerion-command-wave" aria-hidden>
+          <AudioLines />
+        </span>
+        <span className="aerion-command-divider" aria-hidden />
+        <input
+          data-jarvis-chat-input=""
+          data-testid="aerion-command-input"
           className="aerion-command-input"
-          onClick={open}
-          aria-label={say("command.open")}
-        >
-          <span className="aerion-command-wave" aria-hidden>
-            <AudioLines />
-          </span>
-          <span className="aerion-command-divider" aria-hidden />
-          <span className="aerion-command-placeholder">{say("command.placeholder")}</span>
-        </button>
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={placeholder}
+          disabled={!connected || sending}
+          aria-label={say("command.placeholder")}
+        />
+        <input
+          ref={fileInputRef}
+          className="sr-only"
+          type="file"
+          multiple
+          tabIndex={-1}
+          aria-hidden
+          onChange={attachFiles}
+        />
         <button
           type="button"
           className="aerion-command-icon"
-          onClick={open}
-          aria-label={say("command.attach")}
+          onClick={() => fileInputRef.current?.click()}
+          disabled={!connected || uploading || sending}
+          aria-label={uploading ? say("command.uploading") : say("command.attach")}
+          data-testid="aerion-command-attach"
         >
           <Paperclip aria-hidden />
         </button>
         <button
           type="button"
           className="aerion-command-icon"
-          onClick={open}
-          aria-label={say("command.voice")}
+          onClick={toggleDictation}
+          disabled={!connected || sending}
+          aria-pressed={dictating}
+          data-jarvis-dictation-trigger
+          data-testid="aerion-command-voice"
+          aria-label={dictating ? say("command.voice_stop") : say("command.voice")}
         >
-          <Mic aria-hidden />
+          {dictating ? <Square aria-hidden /> : <Mic aria-hidden />}
         </button>
-        <button type="button" className="aerion-command-send" onClick={open} aria-label={say("command.send")}>
+        {cancelResolution.target ? (
+          <button
+            type="button"
+            className="aerion-command-stop"
+            onClick={() => void stopActiveWork()}
+            disabled={cancelling}
+            data-testid="aerion-command-stop"
+            aria-label={cancelling ? say("command.stopping") : say("command.stop")}
+          >
+            <Square aria-hidden />
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="aerion-command-send"
+          onClick={() => void submit()}
+          disabled={!canSend}
+          data-testid="aerion-command-send"
+          aria-label={say("command.send")}
+        >
           <Send aria-hidden />
         </button>
       </div>
+
+      {stagedFiles.length > 0 ? (
+        <div className="aerion-command-context" role="status" data-testid="aerion-command-context">
+          <Paperclip aria-hidden />
+          <span>{stagedFiles.join(", ")}</span>
+        </div>
+      ) : null}
+
       <nav className="aerion-quick-actions" aria-label={say("quick.label")}>
         {quick.map((item) => (
           <button key={item.key} type="button" title={item.label} onClick={() => onNavigate(item.section)}>

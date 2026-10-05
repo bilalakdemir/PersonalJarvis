@@ -267,6 +267,39 @@ def test_start_login_raises_when_binary_missing(monkeypatch: pytest.MonkeyPatch)
         svc.start_login()
 
 
+def test_guarded_handoff_accepts_finished_after_missing_transient_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fast login child may finish before the parent samples ready."""
+
+    statuses = iter(["waiting", "finished"])
+    monkeypatch.setattr(
+        codex_auth_module._GuardedCodexLoginProcess,
+        "_read_status",
+        staticmethod(lambda _path: next(statuses)),
+    )
+    monkeypatch.setattr(
+        codex_auth_module._GuardedCodexLoginProcess,
+        "_publish_control",
+        staticmethod(lambda _path, _status: None),
+    )
+
+    class Process:
+        def poll(self) -> None:
+            return None
+
+    released: list[bool] = []
+    codex_auth_module._GuardedCodexLoginProcess.establish_handoff(
+        Process(),
+        Path("ack"),
+        Path("release"),
+        lambda: released.append(True),
+        timeout_s=0.2,
+    )
+
+    assert released == [True]
+
+
 def test_guarded_login_handoff_runs_real_guardian(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
