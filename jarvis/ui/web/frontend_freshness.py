@@ -81,7 +81,7 @@ def file_sha256(path: Path) -> str:
 def _read_marker(marker_path: Path) -> dict[str, object] | None:
     try:
         payload = json.loads(marker_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError):  # Missing/corrupt marker means stale; rebuild is recovery.
         return None
     if not isinstance(payload, dict) or payload.get("schema") != _MARKER_SCHEMA:
         return None
@@ -100,7 +100,7 @@ def build_is_fresh(repo_root: Path, marker_path: Path) -> bool:
     try:
         current_source = source_fingerprint(frontend_dir)
         current_index = file_sha256(index_file)
-    except OSError:
+    except OSError:  # Unreadable input/dist means freshness is unproven; rebuild safely.
         return False
     return (
         marker.get("source_sha256") == current_source
