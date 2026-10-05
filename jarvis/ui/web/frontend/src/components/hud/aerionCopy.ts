@@ -100,6 +100,11 @@ export const AERION_COPY = {
   "project.phase": "Phase",
   "project.next": "Next",
   "project.blockers": "Blockers",
+  "project.context": "Project context",
+  "project.context.resolved": "Project",
+  "project.context.none": "No project context",
+  "project.context.ambiguous": "Project context ambiguous",
+  "project.context.unavailable": "Project context unavailable",
   "today.approval": "Approval requested",
   "today.error": "Error",
 

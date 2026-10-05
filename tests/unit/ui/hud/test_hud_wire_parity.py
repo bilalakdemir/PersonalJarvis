@@ -56,6 +56,7 @@ def test_vocabularies_match_python_exactly() -> None:
     assert _ts_array("HUD_CONNECTION_STATES") == models.CONNECTION_STATES
     assert _ts_array("HUD_ACTIVITY_STATUSES") == models.ACTIVITY_STATUSES
     assert _ts_array("HUD_ERROR_SCOPES") == models.ERROR_SCOPES
+    assert _ts_array("HUD_PROJECT_CONTEXT_STATUSES") == models.PROJECT_CONTEXT_STATUSES
     assert _ts_array("HUD_DECISION_CHANNELS") == models.DECISION_CHANNELS
     assert _ts_array("HUD_APPROVAL_KINDS") == models.APPROVAL_KINDS
 
@@ -135,6 +136,7 @@ def _ts_interface_fields(name: str) -> set[str]:
 
 def test_every_nested_wire_type_matches_its_dataclass() -> None:
     pairs = {
+        "HudProjectContext": models.HudProjectContext,
         "HudProject": models.HudProject,
         "HudActivity": models.HudActivity,
         "HudApproval": models.HudApproval,

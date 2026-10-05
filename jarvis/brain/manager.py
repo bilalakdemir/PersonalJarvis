@@ -65,7 +65,10 @@ from jarvis.core.events import (
     ResponseGenerated,
     VisionInjected,
 )
-from jarvis.core.project_state_events import ProjectContextResolved
+from jarvis.core.project_state_events import (
+    ProjectContextResolutionChanged,
+    ProjectContextResolved,
+)
 from jarvis.core.protocols import (
     Brain,
     BrainMessage,
@@ -4735,6 +4738,12 @@ class BrainManager:
             )
         except Exception:  # noqa: BLE001 — project routing must not crash a turn
             log.exception("project context resolution failed unexpectedly")
+            self._publish_project_context_resolved(
+                ProjectContextResolution(
+                    status=ProjectContextResolutionStatus.UNAVAILABLE,
+                    detail="project context resolution failed",
+                )
+            )
             return (
                 "[PROJECT CONTEXT — CANONICAL STATE UNAVAILABLE]\n"
                 "Project context resolution failed. Do not reconstruct or "
@@ -4751,28 +4760,44 @@ class BrainManager:
         """Project canonical state onto the existing EventBus for HUD consumers."""
 
         snapshot = resolution.snapshot
-        if not resolution.resolved or snapshot is None:
-            return
         bus = getattr(self, "_bus", None)
         if bus is None:
             return
-        event = ProjectContextResolved(
+
+        resolution_event = ProjectContextResolutionChanged(
             source_layer="brain.project_context",
-            project_id=snapshot.project_id,
-            project_name=safe_preview(snapshot.project_name, max_chars=80).strip(),
-            phase=safe_preview(snapshot.phase, max_chars=80).strip(),
-            current_task=(
-                safe_preview(snapshot.current_task, max_chars=160).strip()
-                if snapshot.current_task
-                else None
-            ),
-            state_revision=snapshot.state_revision,
-            next_step=safe_preview(snapshot.next_step, max_chars=240).strip(),
-            blockers=safe_preview(snapshot.blockers, max_chars=240).strip(),
+            status=resolution.status.value,
+            project_id=str(resolution.project_id or ""),
+            matched_by=safe_preview(resolution.matched_by or "", max_chars=80).strip(),
+            detail=safe_preview(resolution.detail or "", max_chars=240).strip(),
         )
+        resolved_event = (
+            ProjectContextResolved(
+                source_layer="brain.project_context",
+                project_id=snapshot.project_id,
+                project_name=safe_preview(snapshot.project_name, max_chars=80).strip(),
+                phase=safe_preview(snapshot.phase, max_chars=80).strip(),
+                current_task=(
+                    safe_preview(snapshot.current_task, max_chars=160).strip()
+                    if snapshot.current_task
+                    else None
+                ),
+                state_revision=snapshot.state_revision,
+                next_step=safe_preview(snapshot.next_step, max_chars=240).strip(),
+                blockers=safe_preview(snapshot.blockers, max_chars=240).strip(),
+            )
+            if resolution.resolved and snapshot is not None
+            else None
+        )
+
+        async def publish_project_context_events() -> None:
+            await bus.publish(resolution_event)
+            if resolved_event is not None:
+                await bus.publish(resolved_event)
+
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(bus.publish(event))
+            loop.create_task(publish_project_context_events())
         except RuntimeError:
             log.debug("project HUD context publish skipped without a running loop")
 

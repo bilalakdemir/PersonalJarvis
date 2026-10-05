@@ -18,6 +18,13 @@ function snapshot(overrides: Partial<HudSnapshot> = {}): HudSnapshot {
     connection_state: "CONNECTED",
     voice_state: "IDLE",
     attention: [],
+    project_context: {
+      status: "NO_PROJECT",
+      project_id: null,
+      matched_by: "",
+      detail: "",
+      updated_at_ns: 0,
+    },
     active_project: null,
     active_operations: [],
     recent_outputs: [],
@@ -189,6 +196,13 @@ describe("HudView", () => {
   it("shows the active project with its CURRENT task", () => {
     useHudStore.getState().applySnapshot(
       snapshot({
+        project_context: {
+          status: "RESOLVED",
+          project_id: "p1",
+          matched_by: "explicit",
+          detail: "",
+          updated_at_ns: 1,
+        },
         active_project: {
           project_id: "p1",
           project_name: "Atlas",
@@ -209,6 +223,45 @@ describe("HudView", () => {
     expect(panel.textContent).toContain("T-2 ship the HUD");
     expect(panel.textContent).toContain("Wire Recent Outputs");
     expect(panel.textContent).toContain("None");
+    expect(screen.getByTestId("aerion-command-project-context").textContent).toContain("Atlas");
+    expect(screen.getByTestId("aerion-command-project-context").textContent).toContain(
+      "T-2 ship the HUD",
+    );
+  });
+
+  it("does not present the last resolved project as selected when the current turn is ambiguous", () => {
+    useHudStore.getState().applySnapshot(
+      snapshot({
+        project_context: {
+          status: "AMBIGUOUS",
+          project_id: null,
+          matched_by: "",
+          detail: "multiple projects referenced",
+          updated_at_ns: 2,
+        },
+        active_project: {
+          project_id: "p1",
+          project_name: "Atlas",
+          current_task: "T-2 ship the HUD",
+          phase: "Operational Wiring",
+          next_step: "Wire Recent Outputs",
+          blockers: "None",
+          state_revision: "r2",
+          state_valid: true,
+          issue_codes: [],
+          updated_at_ns: 1,
+        },
+      }),
+    );
+    render(<HudView />);
+
+    expect(screen.queryByTestId("hud-panel-project")).toBeNull();
+    expect(screen.getByTestId("hud-project-context").textContent).toContain(
+      "Project context ambiguous",
+    );
+    expect(screen.getByTestId("aerion-command-project-context").textContent).toContain(
+      "Project context ambiguous",
+    );
   });
 
   it("keeps unavailable external sources explicit and renders only real recent outputs", () => {

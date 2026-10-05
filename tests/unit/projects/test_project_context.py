@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
+from jarvis.brain.manager import BrainManager
 from jarvis.brain.project_context import (
+    ProjectContextResolution,
     ProjectContextResolutionStatus,
     ProjectContextResolver,
     ProjectTurnContext,
     render_project_context,
 )
+from jarvis.core.project_state_events import ProjectContextResolutionChanged
 
 
 def _project_text(name: str) -> str:
@@ -312,6 +316,35 @@ def test_ambiguous_render_blocks_history_or_memory_fallback(tmp_path: Path) -> N
     assert resolution.status is ProjectContextResolutionStatus.AMBIGUOUS
     assert "No project has been selected" in block
     assert "Do not choose a project from conversation history or memory" in block
+
+
+def test_manager_publishes_ambiguous_project_resolution_for_hud() -> None:
+    published: list[object] = []
+
+    class Bus:
+        async def publish(self, event: object) -> None:
+            published.append(event)
+
+    async def scenario() -> None:
+        manager = object.__new__(BrainManager)
+        manager._bus = Bus()  # type: ignore[attr-defined]
+        manager._publish_project_context_resolved(  # type: ignore[attr-defined]
+            ProjectContextResolution(
+                status=ProjectContextResolutionStatus.AMBIGUOUS,
+                detail="multiple projects referenced",
+            )
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+
+    assert len(published) == 1
+    event = published[0]
+    assert isinstance(event, ProjectContextResolutionChanged)
+    assert event.status == "AMBIGUOUS"
+    assert event.project_id == ""
+    assert event.detail == "multiple projects referenced"
 
 
 def test_conversation_scoped_active_projects_do_not_leak(tmp_path: Path) -> None:

@@ -252,7 +252,13 @@ export function HudView() {
             </div>
           </section>
 
-          <CommandDock say={say} onNavigate={setActiveSection} operations={snapshot.active_operations} />
+          <CommandDock
+            say={say}
+            onNavigate={setActiveSection}
+            operations={snapshot.active_operations}
+            project={snapshot.active_project}
+            projectContext={snapshot.project_context}
+          />
         </div>
 
         <aside className="aerion-side-column aerion-right-column" data-testid="aerion-zone-right">

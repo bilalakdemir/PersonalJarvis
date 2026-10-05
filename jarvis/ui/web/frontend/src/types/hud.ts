@@ -30,6 +30,14 @@ export type HudActivityStatus = (typeof HUD_ACTIVITY_STATUSES)[number];
 export const HUD_ERROR_SCOPES = ["global", "operation", "agent", "project", "component"] as const;
 export type HudErrorScope = (typeof HUD_ERROR_SCOPES)[number];
 
+export const HUD_PROJECT_CONTEXT_STATUSES = [
+  "RESOLVED",
+  "NO_PROJECT",
+  "AMBIGUOUS",
+  "UNAVAILABLE",
+] as const;
+export type HudProjectContextStatus = (typeof HUD_PROJECT_CONTEXT_STATUSES)[number];
+
 /** Who owns the exact decision for an approval card. */
 export const HUD_DECISION_CHANNELS = [
   "mission_tool_api",
@@ -42,6 +50,14 @@ export type HudDecisionChannel = (typeof HUD_DECISION_CHANNELS)[number];
 
 export const HUD_APPROVAL_KINDS = ["tool_call", "project_state", "memory_promotion"] as const;
 export type HudApprovalKind = (typeof HUD_APPROVAL_KINDS)[number];
+
+export interface HudProjectContext {
+  status: HudProjectContextStatus;
+  project_id: string | null;
+  matched_by: string;
+  detail: string;
+  updated_at_ns: number;
+}
 
 export interface HudProject {
   project_id: string;
@@ -131,6 +147,7 @@ export interface HudSnapshot {
   connection_state: HudConnectionState;
   voice_state: string;
   attention: string[];
+  project_context: HudProjectContext;
   active_project: HudProject | null;
   active_operations: HudActivity[];
   recent_outputs: HudActivity[];
@@ -151,6 +168,7 @@ export const HUD_SNAPSHOT_KEYS = [
   "connection_state",
   "voice_state",
   "attention",
+  "project_context",
   "active_project",
   "active_operations",
   "recent_outputs",

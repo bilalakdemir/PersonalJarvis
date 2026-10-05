@@ -94,6 +94,7 @@ from jarvis.core.memory_events import (
 )
 from jarvis.core.project_state_events import (
     CurrentTaskChanged,
+    ProjectContextResolutionChanged,
     ProjectContextResolved,
     ProjectStateApprovalRequired,
     ProjectStateCommitted,
@@ -117,6 +118,7 @@ from .models import (
     HudError,
     HudMemoryActivity,
     HudProject,
+    HudProjectContext,
     HudSnapshot,
     PrimaryHudState,
 )
@@ -329,6 +331,7 @@ class HudReducer:
 
         self._projects: OrderedDict[str, HudProject] = OrderedDict()
         self._active_project_id: str | None = None
+        self._project_context = HudProjectContext()
 
         self._memory: deque[HudMemoryActivity] = deque(maxlen=MAX_MEMORY_ITEMS)
         self._memory_seq = 0
@@ -376,6 +379,7 @@ class HudReducer:
             ActionPlanned: self._on_cu_action_planned,
             ScreenCaptureAnnounced: self._on_capture_announced,
             ScreenCaptureCompleted: self._on_capture_completed,
+            ProjectContextResolutionChanged: self._on_project_context_resolution,
             ProjectContextResolved: self._on_project_resolved,
             ProjectStateLoaded: self._on_project_loaded,
             ProjectStateInvalid: self._on_project_invalid,
@@ -478,6 +482,7 @@ class HudReducer:
                 work_in_flight=work,
                 error_active=last_error is not None,
             ),
+            project_context=self._project_context,
             active_project=project,
             active_operations=ops,
             recent_outputs=tuple(reversed(self._recent_outputs)),
@@ -1325,6 +1330,28 @@ class HudReducer:
         if ts < project.updated_at_ns:
             return False  # an older write must not overwrite a newer one
         self._projects[project_id] = replace(project, updated_at_ns=ts, **changes)
+        return True
+
+    def _on_project_context_resolution(
+        self,
+        event: ProjectContextResolutionChanged,
+    ) -> bool:
+        ts = _ts(event)
+        if ts < self._project_context.updated_at_ns:
+            return False
+        status = str(event.status or "").strip().upper()
+        if status not in {"RESOLVED", "NO_PROJECT", "AMBIGUOUS", "UNAVAILABLE"}:
+            return False
+        updated = HudProjectContext(
+            status=status,  # type: ignore[arg-type]
+            project_id=_opt(event.project_id, LABEL_CHARS),
+            matched_by=_safe(event.matched_by, LABEL_CHARS),
+            detail=_safe(event.detail, MESSAGE_CHARS),
+            updated_at_ns=ts,
+        )
+        if updated == self._project_context:
+            return False
+        self._project_context = updated
         return True
 
     def _on_project_resolved(self, event: ProjectContextResolved) -> bool:
