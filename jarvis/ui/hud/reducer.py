@@ -133,6 +133,7 @@ log = logging.getLogger(__name__)
 MAX_OPEN_ITEMS: Final[int] = 64
 MAX_ORPHANS: Final[int] = 256
 MAX_RECENT_AGENTS: Final[int] = 8
+MAX_RECENT_OUTPUTS: Final[int] = 12
 MAX_MEMORY_ITEMS: Final[int] = 12
 MAX_PROJECTS: Final[int] = 16
 MAX_TASK_TITLES: Final[int] = 128
@@ -318,6 +319,7 @@ class HudReducer:
         self._ops = _Ledger()
         self._agents = _Ledger()
         self._recent_agents: deque[HudActivity] = deque(maxlen=MAX_RECENT_AGENTS)
+        self._recent_outputs: deque[HudActivity] = deque(maxlen=MAX_RECENT_OUTPUTS)
 
         self._approvals: OrderedDict[str, HudApproval] = OrderedDict()
         self._approval_orphans: OrderedDict[str, int] = OrderedDict()
@@ -478,6 +480,7 @@ class HudReducer:
             ),
             active_project=project,
             active_operations=ops,
+            recent_outputs=tuple(reversed(self._recent_outputs)),
             approval_requests=approvals,
             agent_activity=agents,
             memory_activity=tuple(reversed(self._memory)),
@@ -587,6 +590,25 @@ class HudReducer:
         return True
 
     # ---------------------------------------------------------- tool calls
+    def _remember_output(
+        self,
+        record: HudActivity,
+        ts: int,
+        *,
+        status: str,
+        detail: Any = "",
+    ) -> None:
+        """Retain a bounded terminal work summary; never retain raw payloads."""
+
+        self._recent_outputs.append(
+            replace(
+                record,
+                status=status,  # type: ignore[arg-type]
+                detail=_safe(detail, DETAIL_CHARS),
+                updated_at_ns=max(record.updated_at_ns, ts),
+            )
+        )
+
     @staticmethod
     def _tool_key(trace: str, tool: str) -> str:
         return f"tool:{trace}:{tool}"
@@ -627,6 +649,16 @@ class HudReducer:
         key = self._tool_key(trace, tool)
         closed = self._ops.close(key, ts)
         changed = changed or closed is not None
+        if closed is not None:
+            if isinstance(event, ActionDenied):
+                self._remember_output(closed, ts, status="cancelled", detail=event.reason)
+            elif isinstance(event, ActionExecuted):
+                self._remember_output(
+                    closed,
+                    ts,
+                    status="completed" if event.success else "failed",
+                    detail=event.output_preview if event.success else event.error,
+                )
         if isinstance(event, ActionExecuted) and not event.success:
             changed = (
                 self._set_scoped_error(
@@ -669,6 +701,13 @@ class HudReducer:
         key = f"agent_tool:{_trace(event)}"
         closed = self._ops.close(key, ts)
         changed = closed is not None
+        if closed is not None:
+            self._remember_output(
+                closed,
+                ts,
+                status="completed" if event.success else "failed",
+                detail=event.output_preview if event.success else event.error,
+            )
         if not event.success and closed is not None:
             changed = (
                 self._set_scoped_error(
@@ -705,7 +744,12 @@ class HudReducer:
 
     def _on_harness_completed(self, event: HarnessCompleted) -> bool:
         harness = _safe(event.harness, LABEL_CHARS) or "harness"
-        return self._ops.close(f"harness:{_trace(event)}:{harness}", _ts(event)) is not None
+        ts = _ts(event)
+        closed = self._ops.close(f"harness:{_trace(event)}:{harness}", ts)
+        if closed is None:
+            return False
+        self._remember_output(closed, ts, status="completed")
+        return True
 
     # -------------------------------------------------------------- tasks
     def _on_task_scheduled(self, event: TaskScheduled) -> bool:
@@ -747,6 +791,15 @@ class HudReducer:
         key = f"task:{task_id}"
         closed = self._ops.close(key, ts)
         changed = closed is not None
+        if closed is not None:
+            if isinstance(event, TaskCompleted):
+                status, detail = "completed", ""
+            elif isinstance(event, TaskFailed):
+                status, detail = "failed", event.error
+            else:
+                status = "cancelled"
+                detail = getattr(event, "reason", "")
+            self._remember_output(closed, ts, status=status, detail=detail)
         if isinstance(event, TaskFailed):
             changed = (
                 self._set_scoped_error(
@@ -793,6 +846,13 @@ class HudReducer:
         key = f"workflow:{event.run_id}"
         closed = self._ops.close(key, ts)
         changed = closed is not None
+        if closed is not None:
+            self._remember_output(
+                closed,
+                ts,
+                status="completed" if event.success else "failed",
+                detail="" if event.success else event.error,
+            )
         if not event.success and closed is not None:
             changed = (
                 self._set_scoped_error(
@@ -811,13 +871,14 @@ class HudReducer:
         return changed
 
     # ------------------------------------------------------------- agents
-    def _finish_agent(self, key: str, ts: int, status: str) -> bool:
+    def _finish_agent(self, key: str, ts: int, status: str, *, detail: Any = "") -> bool:
         record = self._agents.close(key, ts)
         if record is None:
             return False
         self._recent_agents.append(
             replace(record, status=status, updated_at_ns=max(record.updated_at_ns, ts))  # type: ignore[arg-type]
         )
+        self._remember_output(record, ts, status=status, detail=detail)
         return True
 
     def _on_agent_started(self, event: JarvisAgentTaskStarted) -> bool:
@@ -841,7 +902,12 @@ class HudReducer:
     def _on_agent_completed(self, event: JarvisAgentTaskCompleted) -> bool:
         ts = _ts(event)
         key = f"agent:{_trace(event)}"
-        changed = self._finish_agent(key, ts, "completed" if event.success else "failed")
+        changed = self._finish_agent(
+            key,
+            ts,
+            "completed" if event.success else "failed",
+            detail=event.summary if event.success else event.error,
+        )
         if changed and not event.success:
             self._set_scoped_error(
                 HudError(
@@ -882,7 +948,12 @@ class HudReducer:
             "timed_out": "failed",
         }.get(status, "completed")
         key = f"mission:{mission_id}"
-        changed = self._finish_agent(key, ts, terminal) or changed
+        changed = self._finish_agent(
+            key,
+            ts,
+            terminal,
+            detail=reason if terminal != "completed" else "",
+        ) or changed
         self._mission_projects.pop(mission_id, None)
         if terminal == "failed" and changed:
             self._set_scoped_error(
