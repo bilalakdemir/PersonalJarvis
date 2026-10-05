@@ -1,10 +1,10 @@
 """Per-agent browser sessions: the persistent profile and the runner jobs.
 
 An agent's browser identity is a folder — ``DATA_DIR/society/<agent_id>/
-browser-profile`` — that Chromium keeps its cookies and logins in. The
+browser-profile`` — that its Chromium-family browser keeps cookies and logins in. The
 person signs in there once (a *login session*: the profile opens headed,
 no task) and every later run reuses the session, headless. ``attach`` mode
-skips the profile and drives the person's own running Chrome over CDP.
+skips the profile and drives the person's own running browser over CDP.
 
 Every job is one subprocess of the managed environment's Python running
 ``runner.py`` (JSON lines over the pipe), killed with the app, capped in
@@ -17,7 +17,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -74,31 +73,6 @@ def profile_has_logins(data_dir: Path, agent_id: str) -> bool:
         if (folder / candidate).is_file():
             return True
     return False
-
-
-def system_chrome() -> str | None:
-    """A system Chrome/Chromium, if one is installed — preferred over a download."""
-    names = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"]
-    for name in names:
-        found = shutil.which(name)
-        if found:
-            return found
-    if sys.platform == "win32":
-        import os
-
-        for root in (
-            os.environ.get("ProgramFiles", r"C:\Program Files"),
-            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-            os.environ.get("LOCALAPPDATA", ""),
-        ):
-            candidate = Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"
-            if candidate.is_file():
-                return str(candidate)
-    if sys.platform == "darwin":
-        candidate = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-        if candidate.is_file():
-            return str(candidate)
-    return None
 
 
 @dataclass(slots=True)
@@ -217,9 +191,7 @@ class BrowserJobs:
             folder = profile_dir(self._data_dir, agent.agent_id)
             folder.mkdir(parents=True, exist_ok=True)
             req["profile_dir"] = str(folder)
-            chrome = system_chrome()
-            if chrome:
-                req["executable_path"] = chrome
+            req["executable_path"] = str(install_mod.preferred_browser_executable(self._data_dir))
         if agent.browser_allowed_domains:
             req["allowed_domains"] = list(agent.browser_allowed_domains)
         return req
@@ -355,7 +327,7 @@ class BrowserJobs:
         window is closed (runner exits), :meth:`end_login` is called, or the
         wall time ends. Attach mode needs no login session."""
         if str(agent.browser_mode) == "attach":
-            return {"ok": True, "skipped": "attach mode uses your own Chrome"}
+            return {"ok": True, "skipped": "attach mode uses your own browser"}
         async with self._lock(agent.agent_id):
             proc = await self._spawn(agent.agent_id)
             request = self._request_base(agent, headless=False)

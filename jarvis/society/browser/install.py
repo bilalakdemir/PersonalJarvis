@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import threading
@@ -86,6 +87,74 @@ def venv_python(data_dir: Path | None = None) -> Path:
 
 def browser_executable(data_dir: Path | None = None) -> Path:
     return _path(data_dir, "executable", "missing-browser")
+
+
+def _system_browser_names() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """PATH lookup groups ordered by browser preference."""
+
+    return (
+        ("brave-browser", "brave-browser-stable", "brave"),
+        ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"),
+    )
+
+
+def _system_browser_paths(
+    system: str | None = None,
+    environ: dict[str, str] | None = None,
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Filesystem lookup groups ordered as Brave, then Chrome/Chromium."""
+
+    system = sys.platform if system is None else system
+    env = os.environ if environ is None else environ
+    if system == "win32":
+        roots = (
+            env.get("ProgramFiles", r"C:\Program Files"),
+            env.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+            env.get("LOCALAPPDATA", ""),
+        )
+        brave = tuple(
+            Path(root) / "BraveSoftware" / "Brave-Browser" / "Application" / "brave.exe"
+            for root in roots
+            if root
+        )
+        chrome = tuple(
+            Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"
+            for root in roots
+            if root
+        )
+        return brave, chrome
+    if system == "darwin":
+        return (
+            (Path("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),),
+            (Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),),
+        )
+    return (), ()
+
+
+def system_browser_executable() -> Path | None:
+    """Return the preferred installed browser, with Brave strictly first."""
+
+    (brave_names, chrome_names) = _system_browser_names()
+    (brave_paths, chrome_paths) = _system_browser_paths()
+    for name in brave_names:
+        if found := shutil.which(name):
+            return Path(found)
+    for candidate in brave_paths:
+        if candidate.is_file():
+            return candidate
+    for name in chrome_names:
+        if found := shutil.which(name):
+            return Path(found)
+    for candidate in chrome_paths:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def preferred_browser_executable(data_dir: Path | None = None) -> Path:
+    """Use Brave when available, then Chrome/Chromium, then managed Chromium."""
+
+    return system_browser_executable() or browser_executable(data_dir)
 
 
 def _lock_digests() -> tuple[str, str]:
