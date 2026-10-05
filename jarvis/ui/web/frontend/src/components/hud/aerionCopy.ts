@@ -57,6 +57,10 @@ export const AERION_COPY = {
   "status.voice": "Voice",
   "status.attention_flags": "Attention",
 
+  "proactive.approval": "Approval required: {subject}",
+  "proactive.completed": "Completed: {subject}",
+  "proactive.error": "Runtime attention: {subject}",
+
   "capability.listen": "Listen",
   "capability.think": "Think",
   "capability.process": "Process",
