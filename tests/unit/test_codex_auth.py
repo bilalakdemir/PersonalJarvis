@@ -267,16 +267,20 @@ def test_start_login_raises_when_binary_missing(monkeypatch: pytest.MonkeyPatch)
         svc.start_login()
 
 
-def test_guarded_login_handoff_runs_real_guardian(
+def test_guarded_login_handoff_releases_parent_lock_before_ready(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """The service and guardian transfer one real cross-process profile lock."""
+    """The parent half of the handoff releases ownership before accepting ready.
+
+    The guardian's real subprocess, lock acquisition and contention behavior are
+    exercised in test_codex_login_guard.py. Keeping this service-side test on
+    the filesystem/control protocol avoids duplicating that integration with a
+    second 30-second process race while still pinning the ordering that makes
+    the transfer safe.
+    """
     import jarvis.codex_auth as codex_mod
-    from jarvis.core.exclusive_process_lock import (
-        ExclusiveProcessLock,
-        ExclusiveProcessLockError,
-    )
+    from jarvis.core.exclusive_process_lock import ExclusiveProcessLock
     from jarvis.core.private_directory import ensure_owner_only_directory
 
     profile = tmp_path / "profile"
@@ -290,42 +294,55 @@ def test_guarded_login_handoff_runs_real_guardian(
         lock_path,
         protected_directory=profile,
     )
-    binary = Path(sys.executable).resolve(strict=True)
-    service = CodexAuthService(
-        str(binary),
-        codex_home=profile,
-        force_file_auth_store=True,
-        isolate_openai_environment=True,
-        log_dir=guard_directory,
-        visible_login=False,
-        lifetime_lock_path=lock_path,
-        login_guard_directory=guard_directory,
-        login_guard_handoff=parent_lock.close,
-        trusted_binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
-    )
-    monkeypatch.setattr(service, "_resolve_binary", lambda: str(binary))
-    if sys.platform == "win32":
-        monkeypatch.setattr(
-            codex_mod,
-            "_NEW_CONSOLE_FLAGS",
-            codex_mod.NO_WINDOW_CREATIONFLAGS,
-        )
+    acknowledgement = guard_directory / "login.ack"
+    release = guard_directory / "login.release"
+    acknowledgement.write_text("waiting", encoding="ascii")
+    acknowledgement.chmod(0o600)
 
-    process = None
+    acquire_published = threading.Event()
+    guardian_errors: list[BaseException] = []
+    original_publish = codex_mod._GuardedCodexLoginProcess._publish_control
+
+    def publish_control(path: Path, status: str) -> None:
+        original_publish(path, status)
+        if path == release and status == "acquire":
+            acquire_published.set()
+
+    monkeypatch.setattr(
+        codex_mod._GuardedCodexLoginProcess,
+        "_publish_control",
+        staticmethod(publish_control),
+    )
+
+    class _GuardianProcess:
+        def poll(self) -> int | None:
+            return None
+
+    def guardian_side() -> None:
+        try:
+            assert acquire_published.wait(2.0), "parent never published acquire"
+            assert parent_lock.closed is True
+            assert release.read_text(encoding="ascii") == "acquire"
+            acknowledgement.write_text("ready", encoding="ascii")
+        except BaseException as exc:  # noqa: BLE001 - surfaced in the parent assertion
+            guardian_errors.append(exc)
+
+    guardian = threading.Thread(target=guardian_side, daemon=True)
+    guardian.start()
     try:
-        process = service.start_login()
+        codex_mod._GuardedCodexLoginProcess.establish_handoff(
+            _GuardianProcess(),  # type: ignore[arg-type]
+            acknowledgement,
+            release,
+            parent_lock.close,
+            timeout_s=2.0,
+        )
+        guardian.join(timeout=2.0)
+        assert not guardian.is_alive()
+        assert guardian_errors == []
         assert parent_lock.closed is True
-        assert process.wait() == 0
-        with pytest.raises(ExclusiveProcessLockError) as caught:
-            ExclusiveProcessLock.acquire(
-                lock_path,
-                protected_directory=profile,
-            )
-        assert caught.value.reason == "busy"
     finally:
-        if process is not None:
-            process.release_profile_lock()
-        elif not parent_lock.closed:
+        if not parent_lock.closed:
             parent_lock.close()
 
     reacquired = ExclusiveProcessLock.acquire(
@@ -333,7 +350,6 @@ def test_guarded_login_handoff_runs_real_guardian(
         protected_directory=profile,
     )
     reacquired.close()
-
 
 def test_guarded_windows_login_closes_job_when_guardian_exits(
     monkeypatch: pytest.MonkeyPatch,
