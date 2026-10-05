@@ -1262,13 +1262,37 @@ class HudReducer:
             return False
         ts = _ts(event)
         project = self._project(project_id)
+        active_changed = self._active_project_id != project_id
+        self._active_project_id = project_id
+        if ts < project.updated_at_ns:
+            return active_changed
+
+        changes: dict[str, Any] = {}
         name = _safe(event.project_name, LABEL_CHARS)
-        if name and ts >= project.updated_at_ns:
-            self._projects[project_id] = replace(project, project_name=name, updated_at_ns=ts)
-        if self._active_project_id != project_id:
-            self._active_project_id = project_id
-            return True
-        return bool(name)
+        phase = _safe(event.phase, LABEL_CHARS)
+        revision = _safe(event.state_revision, LABEL_CHARS)
+        next_step = _safe(event.next_step, MESSAGE_CHARS)
+        blockers = _safe(event.blockers, MESSAGE_CHARS)
+        if name:
+            changes["project_name"] = name
+        if phase:
+            changes["phase"] = phase
+        if event.current_task is not None:
+            changes["current_task"] = _opt(event.current_task, DETAIL_CHARS)
+        if revision:
+            changes["state_revision"] = revision
+        if next_step:
+            changes["next_step"] = next_step
+        if blockers:
+            changes["blockers"] = blockers
+
+        if not changes:
+            return active_changed
+        updated = replace(project, updated_at_ns=ts, **changes)
+        if updated == project:
+            return active_changed
+        self._projects[project_id] = updated
+        return True
 
     def _on_project_loaded(self, event: ProjectStateLoaded) -> bool:
         project_id = str(event.project_id or "").strip()
@@ -1276,14 +1300,22 @@ class HudReducer:
             return False
         if self._active_project_id is None:
             self._active_project_id = project_id
-        return self._write_project(
-            project_id,
-            _ts(event),
-            current_task=_opt(event.current_task, DETAIL_CHARS),
-            state_revision=_safe(event.state_revision, LABEL_CHARS),
-            state_valid=True,
-            issue_codes=(),
-        )
+        changes: dict[str, Any] = {
+            "current_task": _opt(event.current_task, DETAIL_CHARS),
+            "state_revision": _safe(event.state_revision, LABEL_CHARS),
+            "state_valid": True,
+            "issue_codes": (),
+        }
+        phase = _safe(event.phase, LABEL_CHARS)
+        next_step = _safe(event.next_step, MESSAGE_CHARS)
+        blockers = _safe(event.blockers, MESSAGE_CHARS)
+        if phase:
+            changes["phase"] = phase
+        if next_step:
+            changes["next_step"] = next_step
+        if blockers:
+            changes["blockers"] = blockers
+        return self._write_project(project_id, _ts(event), **changes)
 
     def _on_project_invalid(self, event: ProjectStateInvalid) -> bool:
         project_id = str(event.project_id or "").strip()
@@ -1323,6 +1355,9 @@ class HudReducer:
                 project_id,
                 _ts(event),
                 current_task=_opt(event.current_task, DETAIL_CHARS),
+                phase=_safe(event.phase, LABEL_CHARS),
+                next_step=_safe(event.next_step, MESSAGE_CHARS),
+                blockers=_safe(event.blockers, MESSAGE_CHARS),
                 state_revision=_safe(event.resulting_state_revision, LABEL_CHARS),
                 state_valid=True,
                 issue_codes=(),
