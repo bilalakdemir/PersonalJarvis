@@ -65,6 +65,7 @@ from jarvis.core.events import (
     ResponseGenerated,
     VisionInjected,
 )
+from jarvis.core.project_state_events import ProjectContextResolved
 from jarvis.core.protocols import (
     Brain,
     BrainMessage,
@@ -120,6 +121,7 @@ from .local_action_gate import _normalize as _gate_normalize
 from .mission_command_gate import match_mission_command
 from .persona_loader import load_effective_persona_prompt
 from .project_context import (
+    ProjectContextResolution,
     ProjectContextResolutionStatus,
     ProjectContextResolver,
     ProjectExecutionScope,
@@ -4725,6 +4727,7 @@ class BrainManager:
                 ProjectContextResolutionStatus.AMBIGUOUS,
                 ProjectContextResolutionStatus.UNAVAILABLE,
             }
+            self._publish_project_context_resolved(resolution)
             return (
                 render_project_context(resolution),
                 project_execution_scope(resolution),
@@ -4740,6 +4743,35 @@ class BrainManager:
                 None,
                 True,
             )
+
+    def _publish_project_context_resolved(
+        self,
+        resolution: ProjectContextResolution,
+    ) -> None:
+        """Project canonical state onto the existing EventBus for HUD consumers."""
+
+        snapshot = resolution.snapshot
+        if self._bus is None or not resolution.resolved or snapshot is None:
+            return
+        event = ProjectContextResolved(
+            source_layer="brain.project_context",
+            project_id=snapshot.project_id,
+            project_name=safe_preview(snapshot.project_name, max_chars=80).strip(),
+            phase=safe_preview(snapshot.phase, max_chars=80).strip(),
+            current_task=(
+                safe_preview(snapshot.current_task, max_chars=160).strip()
+                if snapshot.current_task
+                else None
+            ),
+            state_revision=snapshot.state_revision,
+            next_step=safe_preview(snapshot.next_step, max_chars=240).strip(),
+            blockers=safe_preview(snapshot.blockers, max_chars=240).strip(),
+        )
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._bus.publish(event))
+        except RuntimeError:
+            log.debug("project HUD context publish skipped without a running loop")
 
     def _build_project_turn_context(
         self,
