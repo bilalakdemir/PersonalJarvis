@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CommandDock } from "@/components/hud/AerionChrome";
@@ -15,7 +15,7 @@ const originalFetch = globalThis.fetch;
 const originalEnsureActiveThread = useEventStore.getState().ensureActiveThread;
 
 const say: AerionSay = (key, vars) => {
-  let text = AERION_COPY[key];
+  let text: string = AERION_COPY[key];
   if (!vars) return text;
   for (const [name, value] of Object.entries(vars)) {
     text = text.replace(`{${name}}`, String(value));
@@ -71,15 +71,17 @@ describe("AERION CommandDock", () => {
 
     const input = screen.getByTestId("aerion-command-input") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "Run the status check" } });
-    fireEvent.click(screen.getByTestId("aerion-command-send"));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("aerion-command-send"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
 
-    await waitFor(() => {
-      expect(ws.send).toHaveBeenCalledWith({
-        type: "message",
-        kind: "text",
-        content: "Run the status check",
-        metadata: { thread_id: "thread-1" },
-      });
+    expect(ws.send).toHaveBeenCalledWith({
+      type: "message",
+      kind: "text",
+      content: "Run the status check",
+      metadata: { thread_id: "thread-1" },
     });
 
     expect(navigate).not.toHaveBeenCalled();
@@ -108,13 +110,14 @@ describe("AERION CommandDock", () => {
       <CommandDock say={say} onNavigate={vi.fn()} operations={[missionActivity("mission/7")]} />,
     );
 
-    fireEvent.click(screen.getByTestId("aerion-command-stop"));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("aerion-command-stop"));
+      await Promise.resolve();
+    });
 
-    await waitFor(() =>
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/missions/mission%2F7/cancel", {
-        method: "POST",
-      }),
-    );
+    expect(globalThis.fetch).toHaveBeenCalledWith("/api/missions/mission%2F7/cancel", {
+      method: "POST",
+    });
   });
 
   it("does not render a direct stop button when multiple targets are running", () => {
