@@ -1,10 +1,10 @@
 """Per-agent browser sessions: the persistent profile and the runner jobs.
 
 An agent's browser identity is a folder — ``DATA_DIR/society/<agent_id>/
-browser-profile`` — that Chromium keeps its cookies and logins in. The
+browser-profile`` — that its Chromium-family browser keeps cookies and logins in. The
 person signs in there once (a *login session*: the profile opens headed,
 no task) and every later run reuses the session, headless. ``attach`` mode
-skips the profile and drives the person's own running Chrome over CDP.
+skips the profile and drives the person's own running browser over CDP.
 
 Every job is one subprocess of the managed environment's Python running
 ``runner.py`` (JSON lines over the pipe), killed with the app, capped in
