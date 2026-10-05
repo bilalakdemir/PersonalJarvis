@@ -26,10 +26,11 @@ import { CoreRings } from "@/components/hud/CoreRings";
 import {
   ActivityPanel,
   ApprovalsPanel,
-  ConversationPanel,
-  MemoryPanel,
+  InboxPanel,
+  RecentOutputsPanel,
   SystemPanel,
   TodayPanel,
+  UpcomingPanel,
   tr,
 } from "@/components/hud/HudPanels";
 import { Reactor } from "@/components/hud/Reactor";
@@ -70,7 +71,6 @@ export function HudView() {
   const hadSnapshot = useHudStore((s) => s.hadSnapshot);
   const connected = useEventStore((s) => s.connected);
   const warming = useEventStore((s) => s.wsWarming);
-  const messages = useEventStore((s) => s.messages);
   const setActiveSection = useEventStore((s) => s.setActiveSection);
   const nowMs = useNow();
 
@@ -121,7 +121,7 @@ export function HudView() {
   const runningCount = [...snapshot.active_operations, ...snapshot.agent_activity].filter(
     (item) => item.status === "running",
   ).length;
-  const agentCount = snapshot.agent_activity.length;
+  const agentCount = snapshot.agent_activity.filter((item) => item.status === "running").length;
   const voiceState = snapshot.voice_state ? capitalize(snapshot.voice_state.replaceAll("_", " ")) : "—";
 
   const modeDetail =
@@ -228,10 +228,7 @@ export function HudView() {
             t={t}
             onOpenProjects={() => setActiveSection("chat-workspace")}
           />
-          <ConversationPanel messages={messages}
-            t={t}
-            onOpen={() => setActiveSection("chats")}
-          />
+          <InboxPanel />
         </aside>
 
         <div className="aerion-center-stage" data-testid="aerion-zone-center">
@@ -267,12 +264,8 @@ export function HudView() {
             onViewTasks={() => setActiveSection("tasks")}
             onManageAgents={() => setActiveSection("agents")}
           />
-          <MemoryPanel
-            items={snapshot.memory_activity}
-            t={t}
-            nowMs={nowMs}
-            onViewAll={() => setActiveSection("memory")}
-          />
+          <RecentOutputsPanel outputs={snapshot.recent_outputs} t={t} nowMs={nowMs} />
+          <UpcomingPanel />
           <SystemPanel
             computer={snapshot.computer_activity}
             error={snapshot.last_error}

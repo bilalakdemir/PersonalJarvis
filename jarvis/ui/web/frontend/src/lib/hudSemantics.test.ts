@@ -21,6 +21,7 @@ function snapshot(overrides: Partial<HudSnapshot> = {}): HudSnapshot {
     attention: [],
     active_project: null,
     active_operations: [],
+    recent_outputs: [],
     approval_requests: [],
     agent_activity: [],
     memory_activity: [],
@@ -70,6 +71,12 @@ function approval(overrides: Partial<HudApproval> = {}): HudApproval {
 describe("parseHudSnapshot", () => {
   it("accepts a well-formed snapshot", () => {
     expect(parseHudSnapshot(snapshot())).not.toBeNull();
+  });
+
+  it("normalizes an older snapshot without recent outputs", () => {
+    const older: Record<string, unknown> = { ...snapshot() };
+    delete older.recent_outputs;
+    expect(parseHudSnapshot(older)?.recent_outputs).toEqual([]);
   });
 
   it("rejects an unknown primary state (fail closed)", () => {
@@ -183,6 +190,7 @@ describe("visiblePanels (contextual, not permanent clutter)", () => {
       approvals: true,
       project: false,
       activity: false,
+      outputs: false,
       computer: true,
       memory: false,
       error: false,
@@ -223,10 +231,10 @@ describe("aerionVisualState", () => {
     };
 
     expect(
-      aerionVisualState(snapshot({ active_operations: [completed] }), "CONNECTED", nowMs),
+      aerionVisualState(snapshot({ recent_outputs: [completed] }), "CONNECTED", nowMs),
     ).toBe("COMPLETED");
     expect(
-      aerionVisualState(snapshot({ active_operations: [completed] }), "CONNECTED", nowMs + 2_000),
+      aerionVisualState(snapshot({ recent_outputs: [completed] }), "CONNECTED", nowMs + 2_000),
     ).toBe("STANDBY");
   });
 

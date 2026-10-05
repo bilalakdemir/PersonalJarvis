@@ -47,6 +47,9 @@ export interface HudProject {
   project_id: string;
   project_name: string;
   current_task: string | null;
+  phase: string;
+  next_step: string;
+  blockers: string;
   state_revision: string;
   state_valid: boolean;
   issue_codes: string[];
@@ -130,6 +133,7 @@ export interface HudSnapshot {
   attention: string[];
   active_project: HudProject | null;
   active_operations: HudActivity[];
+  recent_outputs: HudActivity[];
   approval_requests: HudApproval[];
   agent_activity: HudActivity[];
   memory_activity: HudMemoryActivity[];
@@ -149,6 +153,7 @@ export const HUD_SNAPSHOT_KEYS = [
   "attention",
   "active_project",
   "active_operations",
+  "recent_outputs",
   "approval_requests",
   "agent_activity",
   "memory_activity",

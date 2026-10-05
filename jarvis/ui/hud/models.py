@@ -87,6 +87,9 @@ class HudProject:
     project_id: str
     project_name: str = ""
     current_task: str | None = None
+    phase: str = ""
+    next_step: str = ""
+    blockers: str = ""
     state_revision: str = ""
     #: False after ``ProjectStateInvalid`` until a newer load/commit.
     state_valid: bool = True
@@ -201,6 +204,7 @@ class HudSnapshot:
     attention: tuple[str, ...] = ()
     active_project: HudProject | None = None
     active_operations: tuple[HudActivity, ...] = ()
+    recent_outputs: tuple[HudActivity, ...] = ()
     approval_requests: tuple[HudApproval, ...] = ()
     agent_activity: tuple[HudActivity, ...] = ()
     memory_activity: tuple[HudMemoryActivity, ...] = ()

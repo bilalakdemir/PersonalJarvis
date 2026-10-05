@@ -176,6 +176,37 @@ def test_working_when_background_operation_and_no_foreground() -> None:
     assert [o.label for o in s.active_operations] == ["read_file"]
 
 
+def test_completed_operation_moves_to_recent_outputs_with_real_result_preview() -> None:
+    r = HudReducer()
+    trace = uuid4()
+    r.apply(
+        ActionProposed(
+            trace_id=trace,
+            tool_name="write_report",
+            args={"path": "report.md"},
+            timestamp_ns=at(1),
+        )
+    )
+    r.apply(
+        ActionExecuted(
+            trace_id=trace,
+            tool_name="write_report",
+            success=True,
+            output_preview="report.md created",
+            timestamp_ns=at(2),
+        )
+    )
+    s = snap(r, 3)
+    assert s.active_operations == ()
+    assert len(s.recent_outputs) == 1
+    output = s.recent_outputs[0]
+    assert (output.label, output.status, output.detail) == (
+        "write_report",
+        "completed",
+        "report.md created",
+    )
+
+
 def test_waiting_for_approval_beats_working() -> None:
     r = HudReducer()
     trace = uuid4()
@@ -386,7 +417,18 @@ def test_stale_current_task_update_ignored() -> None:
 
 def test_project_current_update_and_commit() -> None:
     r = HudReducer()
-    r.apply(ProjectContextResolved(project_id="p1", project_name="Atlas", timestamp_ns=at(1)))
+    r.apply(
+        ProjectContextResolved(
+            project_id="p1",
+            project_name="Atlas",
+            phase="Operational Wiring",
+            current_task="T-1",
+            state_revision="r1",
+            next_step="Wire the next authoritative surface.",
+            blockers="None.",
+            timestamp_ns=at(1),
+        )
+    )
     r.apply(
         ProjectStateLoaded(
             project_id="p1", state_revision="r1", current_task="T-1", timestamp_ns=at(2)
@@ -408,6 +450,9 @@ def test_project_current_update_and_commit() -> None:
         "r2",
         True,
     )
+    assert project.phase == "Operational Wiring"
+    assert project.next_step == "Wire the next authoritative surface."
+    assert project.blockers == "None."
 
     r.apply(
         ProjectStateInvalid(project_id="p1", issue_codes=("missing_current",), timestamp_ns=at(4))
@@ -900,6 +945,7 @@ def test_snapshot_wire_shape_is_json_safe() -> None:
     json.dumps(payload)
     assert payload["revision"] == 3 and payload["epoch"] == "e"
     assert isinstance(payload["approval_requests"], list)
+    assert isinstance(payload["recent_outputs"], list)
 
 
 # ------------------------------------------------- N-14H durable project-state proposals
