@@ -87,6 +87,9 @@ class HudProject:
     project_id: str
     project_name: str = ""
     current_task: str | None = None
+    phase: str = ""
+    next_step: str = ""
+    blockers: str = ""
     state_revision: str = ""
     #: False after ``ProjectStateInvalid`` until a newer load/commit.
     state_valid: bool = True
