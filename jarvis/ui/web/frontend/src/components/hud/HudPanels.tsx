@@ -453,6 +453,7 @@ export function ApprovalsPanel({
 // -------------------------------------------------------------------- project
 
 export function ProjectPanel({ project, t }: { project: HudProject; t: T }) {
+  const { say } = useAerionCopy();
   return (
     <div className="aerion-project" data-testid="hud-panel-project" aria-label={t("hud.panel.project")}>
       <IconTile tone={project.state_valid ? "cyan" : "gold"} size="sm">
@@ -464,6 +465,24 @@ export function ProjectPanel({ project, t }: { project: HudProject; t: T }) {
           <span>{t("hud.project.current")}</span>
           {project.current_task ?? t("hud.project.no_current")}
         </p>
+        {project.phase ? (
+          <p className="aerion-project-task">
+            <span>{say("project.phase")}</span>
+            {project.phase}
+          </p>
+        ) : null}
+        {project.next_step ? (
+          <p className="aerion-project-task" title={project.next_step}>
+            <span>{say("project.next")}</span>
+            {project.next_step}
+          </p>
+        ) : null}
+        {project.blockers ? (
+          <p className="aerion-project-task" title={project.blockers}>
+            <span>{say("project.blockers")}</span>
+            {project.blockers}
+          </p>
+        ) : null}
         {!project.state_valid ? (
           <p className="aerion-project-warn">
             {t("hud.project.invalid")} {project.issue_codes.join(", ")}
@@ -636,6 +655,44 @@ export function ConversationPanel({
   );
 }
 
+// ---------------------------------------------------------- external sources
+
+export function InboxPanel() {
+  const { say } = useAerionCopy();
+  return (
+    <AerionPanel
+      slot="conversation"
+      title={say("panel.inbox")}
+      icon={<MessagesSquare />}
+      testId="aerion-panel-inbox"
+    >
+      <PanelEmpty
+        icon={<MessagesSquare />}
+        title={say("source.unavailable")}
+        message={say("source.inbox")}
+      />
+    </AerionPanel>
+  );
+}
+
+export function UpcomingPanel() {
+  const { say } = useAerionCopy();
+  return (
+    <AerionPanel
+      slot="upcoming"
+      title={say("panel.upcoming")}
+      icon={<CalendarDays />}
+      testId="aerion-panel-upcoming"
+    >
+      <PanelEmpty
+        icon={<CalendarDays />}
+        title={say("source.unavailable")}
+        message={say("source.calendar")}
+      />
+    </AerionPanel>
+  );
+}
+
 // -------------------------------------------------------------------- activity
 
 function activityIcon(kind: string): ReactNode {
@@ -795,6 +852,62 @@ export function ActivityPanel({
       <TasksPanel operations={operations} t={t} nowMs={nowMs} onViewAll={onViewTasks} />
       <AgentsPanel agents={agents} t={t} onManage={onManageAgents} />
     </div>
+  );
+}
+
+// --------------------------------------------------------------- recent outputs
+
+export function RecentOutputsPanel({
+  outputs,
+  t,
+  nowMs = Date.now(),
+}: {
+  outputs: HudActivity[];
+  t: T;
+  nowMs?: number;
+}) {
+  const { say } = useAerionCopy();
+  const ordered = orderActivities(outputs).slice(0, 6);
+  return (
+    <AerionPanel
+      slot="outputs"
+      title={say("panel.outputs")}
+      icon={<Sparkles />}
+      count={outputs.length}
+      testId="aerion-panel-outputs"
+    >
+      {ordered.length > 0 ? (
+        <ul className="aerion-rows aerion-rows-tight aerion-scroll">
+          {ordered.map((item) => {
+            const tone = statusTone(item.status);
+            return (
+              <li
+                key={item.activity_id}
+                className="aerion-row aerion-output"
+                data-testid="hud-recent-output"
+                data-status={item.status}
+              >
+                <span className="aerion-output-icon" data-tone={tone} aria-hidden>
+                  {activityIcon(item.kind)}
+                </span>
+                <span className="aerion-output-name">
+                  {item.label}
+                  {item.detail ? <em>{item.detail}</em> : null}
+                </span>
+                <span className="aerion-output-age">
+                  {ageLabel(say, nsToMs(item.updated_at_ns || item.started_at_ns), nowMs)}
+                </span>
+                <span className="aerion-tag" data-tone={tone}>
+                  {t(`hud.status.${item.status}`)}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <PanelEmpty icon={<Sparkles />} message={say("empty.outputs")} />
+      )}
+    </AerionPanel>
   );
 }
 
