@@ -4751,7 +4751,10 @@ class BrainManager:
         """Project canonical state onto the existing EventBus for HUD consumers."""
 
         snapshot = resolution.snapshot
-        if self._bus is None or not resolution.resolved or snapshot is None:
+        if not resolution.resolved or snapshot is None:
+            return
+        bus = getattr(self, "_bus", None)
+        if bus is None:
             return
         event = ProjectContextResolved(
             source_layer="brain.project_context",
@@ -4769,7 +4772,7 @@ class BrainManager:
         )
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self._bus.publish(event))
+            loop.create_task(bus.publish(event))
         except RuntimeError:
             log.debug("project HUD context publish skipped without a running loop")
 
