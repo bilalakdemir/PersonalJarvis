@@ -12,6 +12,7 @@ import {
   HUD_CONNECTION_STATES,
   HUD_DECISION_CHANNELS,
   HUD_PRIMARY_STATES,
+  HUD_PROJECT_CONTEXT_STATUSES,
   type HudApproval,
   type HudConnectionState,
   type HudPrimaryState,
@@ -45,6 +46,10 @@ export function parseHudSnapshot(raw: unknown): HudSnapshot | null {
     if (!Array.isArray(raw[key])) return null;
   }
   if (raw.recent_outputs !== undefined && !Array.isArray(raw.recent_outputs)) return null;
+  if (raw.project_context !== undefined) {
+    if (!isRecord(raw.project_context)) return null;
+    if (!includes(HUD_PROJECT_CONTEXT_STATUSES, raw.project_context.status)) return null;
+  }
   if (!isRecord(raw.computer_activity)) return null;
   for (const card of raw.approval_requests as unknown[]) {
     if (!isRecord(card)) return null;
@@ -52,10 +57,19 @@ export function parseHudSnapshot(raw: unknown): HudSnapshot | null {
     if (!includes(HUD_APPROVAL_KINDS, card.kind)) return null;
     if (!includes(HUD_DECISION_CHANNELS, card.decision_channel)) return null;
   }
-  if (raw.recent_outputs === undefined) {
-    return { ...raw, recent_outputs: [] } as unknown as HudSnapshot;
-  }
-  return raw as unknown as HudSnapshot;
+  const normalized = {
+    ...raw,
+    recent_outputs: raw.recent_outputs ?? [],
+    project_context:
+      raw.project_context ?? {
+        status: "NO_PROJECT",
+        project_id: null,
+        matched_by: "",
+        detail: "",
+        updated_at_ns: 0,
+      },
+  };
+  return normalized as unknown as HudSnapshot;
 }
 
 /**
