@@ -22,6 +22,12 @@ if exist "scripts\check-working-tree.ps1" (
     powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\check-working-tree.ps1"
 )
 
+python -m jarvis.ui.web.frontend_freshness --repo-root "%CD%" --marker "data-dev\frontend-build.json"
+if errorlevel 1 (
+    echo Personal Jarvis Dev: frontend build freshness check failed.
+    exit /b 1
+)
+
 if "%1"=="--debug" (
     set JARVIS_DEBUG=1
     python -m jarvis.ui.web.launcher --instance dev
