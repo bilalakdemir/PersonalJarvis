@@ -261,6 +261,7 @@ def _signature(snap: HudSnapshot) -> tuple[Any, ...]:
         snap.connection_state,
         snap.voice_state,
         snap.attention,
+        snap.project_context,
         snap.active_project,
         snap.active_operations,
         snap.recent_outputs,
