@@ -22,6 +22,7 @@ from .models import (
     HudError,
     HudMemoryActivity,
     HudProject,
+    HudProjectContext,
     HudSnapshot,
 )
 from .reducer import HudReducer, register_memory_mapper, unregister_memory_mapper
@@ -34,6 +35,7 @@ __all__ = [
     "HudError",
     "HudMemoryActivity",
     "HudProject",
+    "HudProjectContext",
     "HudReducer",
     "HudSnapshot",
     "HudStateAdapter",
