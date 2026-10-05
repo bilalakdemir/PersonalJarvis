@@ -19,6 +19,13 @@ function snapshot(overrides: Partial<HudSnapshot> = {}): HudSnapshot {
     connection_state: "CONNECTED",
     voice_state: "IDLE",
     attention: [],
+    project_context: {
+      status: "NO_PROJECT",
+      project_id: null,
+      matched_by: "",
+      detail: "",
+      updated_at_ns: 0,
+    },
     active_project: null,
     active_operations: [],
     recent_outputs: [],
@@ -73,10 +80,22 @@ describe("parseHudSnapshot", () => {
     expect(parseHudSnapshot(snapshot())).not.toBeNull();
   });
 
-  it("normalizes an older snapshot without recent outputs", () => {
+  it("normalizes an older snapshot without recent outputs or project context", () => {
     const older: Record<string, unknown> = { ...snapshot() };
     delete older.recent_outputs;
-    expect(parseHudSnapshot(older)?.recent_outputs).toEqual([]);
+    delete older.project_context;
+    const parsed = parseHudSnapshot(older);
+    expect(parsed?.recent_outputs).toEqual([]);
+    expect(parsed?.project_context.status).toBe("NO_PROJECT");
+  });
+
+  it("rejects an unknown project context status", () => {
+    expect(
+      parseHudSnapshot({
+        ...snapshot(),
+        project_context: { ...snapshot().project_context, status: "GUESSED" },
+      }),
+    ).toBeNull();
   });
 
   it("rejects an unknown primary state (fail closed)", () => {
