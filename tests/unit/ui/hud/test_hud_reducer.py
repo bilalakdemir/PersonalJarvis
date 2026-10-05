@@ -50,6 +50,7 @@ from jarvis.core.memory_events import (
 )
 from jarvis.core.project_state_events import (
     CurrentTaskChanged,
+    ProjectContextResolutionChanged,
     ProjectContextResolved,
     ProjectStateApprovalRequired,
     ProjectStateCommitted,
@@ -413,6 +414,70 @@ def test_stale_current_task_update_ignored() -> None:
 
 
 # ----------------------------------------------------------------------------- project
+
+
+def test_project_resolution_status_is_current_turn_truth_without_deleting_last_project() -> None:
+    r = HudReducer()
+    r.apply(
+        ProjectContextResolutionChanged(
+            status="RESOLVED",
+            project_id="p1",
+            matched_by="explicit",
+            timestamp_ns=at(1),
+        )
+    )
+    r.apply(
+        ProjectContextResolved(
+            project_id="p1",
+            project_name="Atlas",
+            current_task="T-1",
+            timestamp_ns=at(1.1),
+        )
+    )
+    resolved = snap(r, 2)
+    assert resolved.project_context.status == "RESOLVED"
+    assert resolved.project_context.project_id == "p1"
+    assert resolved.active_project is not None
+    assert resolved.active_project.project_name == "Atlas"
+
+    r.apply(
+        ProjectContextResolutionChanged(
+            status="AMBIGUOUS",
+            detail="multiple projects referenced",
+            timestamp_ns=at(3),
+        )
+    )
+    ambiguous = snap(r, 4)
+    assert ambiguous.project_context.status == "AMBIGUOUS"
+    assert ambiguous.project_context.detail == "multiple projects referenced"
+    # Conversation-scoped routing can still retain the previous active project;
+    # the new status tells presentation not to pretend it was selected this turn.
+    assert ambiguous.active_project is not None
+    assert ambiguous.active_project.project_id == "p1"
+
+    r.apply(
+        ProjectContextResolutionChanged(
+            status="NO_PROJECT",
+            timestamp_ns=at(5),
+        )
+    )
+    no_project = snap(r, 6)
+    assert no_project.project_context.status == "NO_PROJECT"
+    assert no_project.project_context.project_id is None
+
+
+def test_project_resolution_status_rejects_unknown_and_stale_values() -> None:
+    r = HudReducer()
+    assert r.apply(
+        ProjectContextResolutionChanged(status="AMBIGUOUS", timestamp_ns=at(2))
+    ) is True
+    assert r.apply(
+        ProjectContextResolutionChanged(status="BANANA", timestamp_ns=at(3))
+    ) is False
+    assert r.apply(
+        ProjectContextResolutionChanged(status="UNAVAILABLE", timestamp_ns=at(1))
+    ) is False
+    assert snap(r, 4).project_context.status == "AMBIGUOUS"
 
 
 def test_project_current_update_and_commit() -> None:
@@ -946,6 +1011,7 @@ def test_snapshot_wire_shape_is_json_safe() -> None:
     assert payload["revision"] == 3 and payload["epoch"] == "e"
     assert isinstance(payload["approval_requests"], list)
     assert isinstance(payload["recent_outputs"], list)
+    assert payload["project_context"]["status"] == "NO_PROJECT"
 
 
 # ------------------------------------------------- N-14H durable project-state proposals
