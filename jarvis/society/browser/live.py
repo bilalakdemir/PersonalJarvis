@@ -401,7 +401,7 @@ class LiveSessions:
                         "profile_dir": str(folder / "browser-profile"),
                         "window_view": window_view,
                         "workspace": str(folder / "workspace"),
-                        "executable": str(install.browser_executable(self.data_dir)),
+                        "executable": str(install.preferred_browser_executable(self.data_dir)),
                         "icon_path": str(
                             Path(__file__).parents[2] / "assets" / "icons" / "jarvis.ico"
                         ),
