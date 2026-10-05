@@ -1,17 +1,13 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUp } from "lucide-react";
 import { getWSClient } from "@/hooks/useWebSocket";
+import { sendChatMessage } from "@/lib/chat";
 import { useVoiceEngineDisplay } from "@/hooks/useVoiceEngineDisplay";
 import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
 import { useEventStore } from "@/store/events";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 import { DictationButton } from "@/components/agentchat/DictationButton";
-
-// Safety net: if the brain doesn't respond within 60s (no reply, no error event),
-// we revert the indicator. A backend hang must not leave the UI stuck in the
-// wait state permanently.
-const THINKING_TIMEOUT_MS = 60_000;
 
 /**
  * The composer — a card with the text box and, on its bottom row, dictation,
@@ -31,16 +27,13 @@ export function ChatInput() {
   // mode is realtime — the same resolver the header and the sidebar use.
   const engine = useVoiceEngineDisplay();
   const wsWarming = useEventStore((s) => s.wsWarming);
-  // The turn's progress is no longer mirrored in the composer — the chat
-  // column renders the live steps (components/home/TurnSteps) as the
-  // in-progress assistant turn. The composer only arms the wait state.
-  const setChatThinking = useEventStore((s) => s.setChatThinking);
+  // The turn's progress is owned by the shared sendChatMessage path, which
+  // also arms the same optimistic thinking state used by every text surface.
   // Mic-dictation: live transcript streams into the box as the user speaks.
   const dictating = useEventStore((s) => s.dictating);
   const dictationText = useEventStore((s) => s.dictationText);
   const dictationCommitSeq = useEventStore((s) => s.dictationCommitSeq);
   const setDictating = useEventStore((s) => s.setDictating);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The textarea content captured at dictation-start; interim transcripts are
   // rendered as `base + interim` so letters appear live without clobbering what
   // the user had already typed.
@@ -52,12 +45,6 @@ export function ChatInput() {
   // the sequence, so by the time the commit effect runs it already reads false.
   const mirroringRef = useRef(false);
   const lastCommitSeqRef = useRef(dictationCommitSeq);
-
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    };
-  }, []);
 
   // While dictating, mirror the live interim tail into the textarea in real time.
   useEffect(() => {
@@ -97,36 +84,7 @@ export function ChatInput() {
     if (!content) return;
     // A pending dictation must not bleed into the next turn.
     if (dictating) stopDictation();
-    const client = getWSClient();
-    // Route the message into the active conversation so the brain (seeded on
-    // resume) and the persisted thread line up. ensureActiveThread() lazily
-    // creates a text thread for an unsaved "New chat" or a voice continuation.
-    let threadId: string | undefined;
-    try {
-      threadId = await useEventStore.getState().ensureActiveThread();
-    } catch {
-      threadId = undefined; // fall back to the WS session thread
-    }
-    client?.send({
-      type: "message",
-      kind: "text",
-      content,
-      metadata: threadId ? { thread_id: threadId } : undefined,
-    });
-    useEventStore.getState().pushEvent({
-      id: `local-${Date.now()}`,
-      name: "ui.user_message",
-      layer: "ui",
-      ts: Date.now(),
-      payload: { content },
-    });
-    setChatThinking(true);
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => {
-      setChatThinking(false);
-      timeoutRef.current = null;
-    }, THINKING_TIMEOUT_MS);
-    setValue("");
+    if (await sendChatMessage(content)) setValue("");
   }
 
   function startDictation() {
