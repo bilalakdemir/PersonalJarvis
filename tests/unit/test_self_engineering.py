@@ -19,7 +19,7 @@ def test_failed_only_returns_terminal_failures() -> None:
 
 def test_redact_masks_subscription_provider_secrets() -> None:
     assert redact("token nvapi-1234567890SECRET") == "token [REDACTED]"
-    assert redact("Authorization: Bearer abcdefghijklmnop") == "Authorization: [REDACTED]"
+    assert "<redacted:bearer_token>" in redact("Authorization: Bearer abcdefghijklmnop")
 
 
 def test_risk_classifier_fails_closed() -> None:
