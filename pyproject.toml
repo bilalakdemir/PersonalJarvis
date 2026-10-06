@@ -763,6 +763,10 @@ run-app-action = "jarvis.plugins.tool.app_action:RunAppActionTool"
 delegate-to-agent = "jarvis.plugins.tool.delegate_to_agent:DelegateToAgentTool"
 society-status = "jarvis.plugins.tool.delegate_to_agent:SocietyStatusTool"
 message-agent = "jarvis.plugins.tool.message_agent:LeadMessageAgentTool"
+# Isolated lead browser for the classic AERION/router chat. The agent-chat
+# SurfaceKit already owns the same BrowserTool; this entry point is only the
+# lazy router bridge so website work does not fall into desktop Computer-Use.
+society-browser = "jarvis.plugins.tool.society_browser:LeadSocietyBrowserTool"
 # Skills-Brain-Integration — Brain-callable executor for installed user skills.
 run-skill = "jarvis.plugins.tool.run_skill:RunSkillTool"
 # Phase B5 — long-term wiki recall (router-tier, read-only).
