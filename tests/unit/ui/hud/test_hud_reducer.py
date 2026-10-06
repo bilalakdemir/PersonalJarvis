@@ -180,6 +180,40 @@ def test_working_when_background_operation_and_no_foreground() -> None:
     assert [o.label for o in s.active_operations] == ["read_file"]
 
 
+def test_failed_tool_preserves_request_context_for_incident_diagnosis() -> None:
+    r = HudReducer()
+    trace = uuid4()
+    request = {
+        "harness": "screenshot",
+        "prompt": "Open Brave and go to https://example.com. Tell me the page title.",
+    }
+    r.apply(
+        ActionProposed(
+            trace_id=trace,
+            tool_name="dispatch_to_harness",
+            args=request,
+            rationale="The local-action gate selected desktop control.",
+            timestamp_ns=at(1),
+        )
+    )
+    r.apply(
+        ActionExecuted(
+            trace_id=trace,
+            tool_name="dispatch_to_harness",
+            success=False,
+            error="exit 3",
+            timestamp_ns=at(2),
+        )
+    )
+
+    output = snap(r, 3).recent_outputs[-1]
+    assert output.status == "failed"
+    assert output.detail == "exit 3"
+    assert "Open Brave" in output.request_detail
+    assert "https://example.com" in output.request_detail
+    assert output.rationale == "The local-action gate selected desktop control."
+
+
 def test_completed_operation_moves_to_recent_outputs_with_real_result_preview() -> None:
     r = HudReducer()
     trace = uuid4()
