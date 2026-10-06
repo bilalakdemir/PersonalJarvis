@@ -245,6 +245,8 @@ describe("aerionVisualState", () => {
       worker_id: "w1",
       run_id: null,
       detail: "",
+      request_detail: "",
+      rationale: "",
       started_at_ns: (nowMs - 5_000) * 1_000_000,
       updated_at_ns: (nowMs - 500) * 1_000_000,
     };
@@ -271,6 +273,8 @@ describe("aerionVisualState", () => {
       worker_id: "w1",
       run_id: null,
       detail: "",
+      request_detail: "",
+      rationale: "",
       started_at_ns: nowMs * 1_000_000,
       updated_at_ns: nowMs * 1_000_000,
     };
