@@ -6,7 +6,8 @@ from uuid import uuid4
 import pytest
 
 from jarvis.core.bus import EventBus
-from jarvis.core.protocols import ExecutionContext
+from jarvis.core.events import HarnessCompleted, HarnessDispatched, HarnessProgress
+from jarvis.core.protocols import ExecutionContext, HarnessTask
 from jarvis.harness.manager import HarnessManager
 from jarvis.plugins.tool.dispatch_to_harness import DispatchToHarnessTool
 from tests.fixtures.harness.fake_harness import FakeHarness
@@ -46,6 +47,60 @@ async def test_single_harness_success(ctx):
     assert result.success is True
     assert result.output["harness"] == "harness-a"
     assert "Build succeeded." in result.output["stdout"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_lifecycle_uses_one_trace_and_closes() -> None:
+    bus = EventBus()
+    events = []
+
+    async def observe(event):
+        events.append(event)
+
+    bus.subscribe_all(observe)
+    mgr = _make_manager_with_fakes(
+        bus, {"fake": FakeHarness(scripted_output="streamed")}
+    )
+
+    results = [item async for item in mgr.dispatch("fake", HarnessTask(prompt="x"))]
+
+    assert results[-1].is_final is True
+    lifecycle = [
+        event
+        for event in events
+        if isinstance(event, (HarnessDispatched, HarnessProgress, HarnessCompleted))
+    ]
+    assert isinstance(lifecycle[0], HarnessDispatched)
+    assert isinstance(lifecycle[-1], HarnessCompleted)
+    assert {event.trace_id for event in lifecycle} == {lifecycle[0].trace_id}
+    assert lifecycle[-1].result is not None
+    assert lifecycle[-1].result.exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_abandoned_dispatch_emits_correlated_cancel_completion() -> None:
+    bus = EventBus()
+    events = []
+
+    async def observe(event):
+        events.append(event)
+
+    bus.subscribe_all(observe)
+    mgr = _make_manager_with_fakes(
+        bus, {"fake": FakeHarness(scripted_output="streamed")}
+    )
+
+    dispatch = mgr.dispatch("fake", HarnessTask(prompt="x"))
+    first = await anext(dispatch)
+    assert first.is_final is False
+    await dispatch.aclose()
+
+    opened = next(event for event in events if isinstance(event, HarnessDispatched))
+    completed = next(event for event in events if isinstance(event, HarnessCompleted))
+    assert completed.trace_id == opened.trace_id
+    assert completed.result is not None
+    assert completed.result.is_final is True
+    assert completed.result.exit_code == 130
 
 
 @pytest.mark.asyncio
