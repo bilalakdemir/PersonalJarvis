@@ -57,7 +57,7 @@ def _row_time(row: dict[str, Any]) -> int:
     for key in ("updated_at_ns", "started_at_ns"):
         try:
             value = int(row.get(key) or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError):  # malformed timestamp is unavailable evidence, not fatal
             continue
         if value > 0:
             return value
