@@ -2014,3 +2014,200 @@ def _build_spawn_fallback(ack_cfg: Any) -> tuple[Any, Any]:
                 fb_name,
                 sorted(REGISTRY.keys()),
             )
+            return None, None
+        fb_provider = provider_cls(getattr(ack_cfg.providers, fb_name))
+        fb_breaker = CircuitBreaker(
+            threshold=ack_cfg.circuit_breaker_threshold,
+            cooldown_s=ack_cfg.circuit_breaker_cooldown_s,
+        )
+        log.info("Spawn-Announcer: failover wired (provider=%s).", fb_name)
+        return fb_provider, fb_breaker
+    except Exception as exc:  # noqa: BLE001 — failover must never break wiring
+        log.warning(
+            "Spawn-Announcer: failover provider %r build failed: %s — no failover.",
+            fb_name,
+            exc,
+        )
+        return None, None
+
+
+def build_spawn_announcer(jcfg: Any | None = None) -> Any:
+    """Build the ``SpawnAnnouncementComposer`` for the ``spawn_worker`` tool.
+
+    Never raises and never returns ``None``: when the flash-LLM path is
+    unavailable (``[ack_brain].enabled = false``, ``spawn_announcements =
+    false``, missing adapter, construction error) the composer is returned
+    in fallback-only mode — the spoken spawn confirmation is then drawn
+    from the curated bilingual no-repeat pool, so the user always hears an
+    acknowledgement (AD-OE6).
+
+    The composer gets its OWN provider instance and circuit breaker. The
+    breaker state is intentionally not shared with the pre-thinking
+    AckGenerator (built later in ``desktop_app``): both protect the same
+    provider class, but their call sites have different latency stakes and
+    a shared mutable singleton across the two build paths would couple the
+    desktop-app wiring to the brain factory for marginal gain.
+    """
+    from jarvis.brain.ack_brain.spawn_announcement import (
+        SpawnAnnouncementComposer,
+    )
+
+    def _live_agent_brand() -> str:
+        # Read fresh per spawn so a wake-word change re-brands the spoken
+        # announcement without a restart; resolution never raises upstream
+        # (the composer falls back to the neutral brand on any failure).
+        from jarvis.brain.assistant_name import agent_brand
+        from jarvis.core.config import load_config
+
+        return agent_brand(load_config())
+
+    try:
+        if jcfg is None:
+            from jarvis.core.config import load_config
+            jcfg = load_config()
+        ack_cfg = getattr(jcfg, "ack_brain", None)
+        if (
+            ack_cfg is None
+            or not getattr(ack_cfg, "enabled", False)
+            or not getattr(ack_cfg, "spawn_announcements", True)
+        ):
+            log.info(
+                "Spawn-Announcer: flash path disabled — fallback pool only."
+            )
+            return SpawnAnnouncementComposer(brand_provider=_live_agent_brand)
+
+        from jarvis.brain.ack_brain import CircuitBreaker
+
+        provider = _build_flash_provider(jcfg, ack_cfg)
+        if provider is None:
+            return SpawnAnnouncementComposer(brand_provider=_live_agent_brand)
+        breaker = CircuitBreaker(
+            threshold=ack_cfg.circuit_breaker_threshold,
+            cooldown_s=ack_cfg.circuit_breaker_cooldown_s,
+        )
+        log.info(
+            "Spawn-Announcer: LLM composition wired (provider=%s).",
+            ack_cfg.provider,
+        )
+        # Failover on a separate provider/key so a dead primary flash provider
+        # degrades to the live secondary, not to the canned pool (2026-06-21
+        # regression: gemini 429 with no spawn-path failover -> stock phrases).
+        fb_provider, fb_breaker = _build_spawn_fallback(ack_cfg)
+        return SpawnAnnouncementComposer(
+            provider=provider,
+            config=ack_cfg,
+            breaker=breaker,
+            fallback_provider=fb_provider,
+            fallback_breaker=fb_breaker,
+            preferences_provider=_flash_preferences_provider(jcfg),
+            brand_provider=_live_agent_brand,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "build_spawn_announcer() failed: %s — fallback pool only.", exc
+        )
+        return SpawnAnnouncementComposer(brand_provider=_live_agent_brand)
+
+
+def build_readback_composer(jcfg: Any | None = None) -> Any:
+    """Build the ``ReadbackComposer`` for the deterministic action-path readbacks.
+
+    The engine behind the maintainer's "no fixed stock phrases" mandate: the CU
+    outcome/dispatch readbacks, budget guards, and tool-failed line are phrased
+    fresh for the situation by a bounded flash call, with the EXISTING canned
+    line as the instant fallback.
+
+    Never raises and never returns ``None``: when the flash path is unavailable
+    (``[ack_brain].enabled = false``, ``readback_generation = false``, missing
+    adapter, construction error) the composer is returned in fallback-only mode,
+    so the call sites still emit the canned line (AD-OE6, zero behavior change).
+    Mirrors :func:`build_spawn_announcer` — own provider + breaker plus a
+    separate-provider failover so a dead primary degrades to the live secondary,
+    not straight to the canned table.
+    """
+    from jarvis.voice.contextual_readback import ReadbackComposer
+
+    try:
+        if jcfg is None:
+            from jarvis.core.config import load_config
+            jcfg = load_config()
+        ack_cfg = getattr(jcfg, "ack_brain", None)
+        if (
+            ack_cfg is None
+            or not getattr(ack_cfg, "enabled", False)
+            or not getattr(ack_cfg, "readback_generation", True)
+        ):
+            log.info("Readback-Composer: flash path disabled — fallback-only mode.")
+            return ReadbackComposer()
+
+        from jarvis.brain.ack_brain import CircuitBreaker
+
+        provider = _build_flash_provider(jcfg, ack_cfg)
+        if provider is None:
+            return ReadbackComposer()
+        breaker = CircuitBreaker(
+            threshold=ack_cfg.circuit_breaker_threshold,
+            cooldown_s=ack_cfg.circuit_breaker_cooldown_s,
+        )
+        # Failover on a separate provider/key (built AFTER _build_flash_provider
+        # so ack_cfg.provider is the resolved primary). Reuses the spawn-path
+        # bare-provider failover builder — the composer owns its validate logic.
+        fb_provider, fb_breaker = _build_spawn_fallback(ack_cfg)
+        log.info(
+            "Readback-Composer: LLM composition wired (provider=%s).",
+            ack_cfg.provider,
+        )
+        return ReadbackComposer(
+            provider=provider,
+            config=ack_cfg,
+            breaker=breaker,
+            fallback_provider=fb_provider,
+            fallback_breaker=fb_breaker,
+            preferences_provider=_flash_preferences_provider(jcfg),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "build_readback_composer() failed: %s — fallback-only mode.", exc
+        )
+        return ReadbackComposer()
+
+
+def _router_provider_override(config: Any) -> str | None:
+    """The provider that overrides ``[brain.router].provider`` at boot, or None.
+
+    Provider-override logic: if the user has switched to a different provider
+    via voice/UI ("switch to gemini" -> brain.primary="gemini" persisted in
+    jarvis.toml) while [brain.router].provider still points elsewhere, we
+    prefer brain.primary. That is the global master selection that should
+    apply to all tiers.
+
+    The realtime voice call owns its key (user mandate 2026-09-29: the GPT-Live
+    key pays for the voice call and its thinking model only). While voice runs
+    realtime the Brain tab is hidden, so a ``brain.primary`` left on that key's
+    family is not a choice anyone can see; it must not pull text turns onto the
+    voice budget when the router tier names another provider. A single-key
+    install (no other router provider) keeps working on the key.
+    """
+    from jarvis.brain.voice_key import bills_voice_key
+
+    primary = config.brain.primary
+    tier_cfg = getattr(config.brain, "router", None)
+    tier_provider = tier_cfg.provider if tier_cfg else None
+    if (
+        bills_voice_key(config, primary)
+        and tier_provider
+        and not bills_voice_key(config, tier_provider)
+    ):
+        log.info(
+            "Router stays on [brain.router].provider=%s: brain.primary=%s bills "
+            "the realtime voice key.",
+            tier_provider, primary,
+        )
+        return None
+    if primary and primary != tier_provider:
+        log.info(
+            "Startup override: brain.primary=%s overrides [brain.router].provider=%s",
+            primary, tier_provider,
+        )
+        return primary
+    return None
