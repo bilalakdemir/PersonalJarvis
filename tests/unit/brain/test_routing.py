@@ -2607,3 +2607,1313 @@ def test_external_integration_without_capability_stays_unsupported() -> None:
                 f"external integration {utterance!r} must stay unsupported"
             )
             assert not manager._should_force_spawn(utterance), (
+                f"external integration {utterance!r} must not spawn a worker"
+            )
+    finally:
+        if original is not None:
+            __import__("sys").modules["jarvis.core.capabilities"] = original
+        else:
+            __import__("sys").modules.pop("jarvis.core.capabilities", None)
+
+
+def test_coding_task_mentioning_integration_is_not_refused() -> None:
+    """A coding task that merely MENTIONS an integration name as a topic /
+    data-type (email validator, calendar parser, Spotify-like player) is generic
+    sub-agent work — NOT a real dispatch. It must never be refused. The
+    integration name alone is not enough; a real dispatch verb must be present
+    (code-review MAJOR, 2026-06-01). Since 2026-07-21 it no longer FORCE-spawns
+    either (strict mode is explicit-only) — the router LLM handles it inline or
+    offers delegation."""
+    original = __import__("sys").modules.get("jarvis.core.capabilities")
+    try:
+        manager = _strict_manager_with_mock_registry()
+        for utterance in (
+            "implementier eine Funktion die Email-Adressen validiert",
+            "baue einen Parser fuer Kalender-Dateien im ICS-Format",
+            "schreib Code der Spotify-Playlists aus einer JSON-Datei liest",
+        ):
+            assert manager._check_unsupported_intent(utterance) is None, (
+                f"coding task {utterance!r} must not be refused (mentions an "
+                "integration name only as data, not a dispatch target)"
+            )
+            assert not manager._should_force_spawn(utterance), (
+                f"coding task {utterance!r} must not force-spawn without an "
+                "explicit delegation trigger (mandate 2026-07-21)"
+            )
+    finally:
+        if original is not None:
+            __import__("sys").modules["jarvis.core.capabilities"] = original
+        else:
+            __import__("sys").modules.pop("jarvis.core.capabilities", None)
+
+
+def test_is_generic_subagent_work_false_on_empty_registry() -> None:
+    """An empty/unseeded registry must NOT let _is_generic_subagent_work spawn —
+    otherwise a boot before seed_registry() would spawn-storm (mirrors the
+    _check_unsupported_intent empty-registry guard)."""
+    original = __import__("sys").modules.get("jarvis.core.capabilities")
+    try:
+        manager = _strict_manager_with_mock_registry(populated=False)
+        assert not manager._is_generic_subagent_work("baue mir ein Skript"), (
+            "empty registry must not spawn — explicit trigger is the sole signal"
+        )
+    finally:
+        if original is not None:
+            __import__("sys").modules["jarvis.core.capabilities"] = original
+        else:
+            __import__("sys").modules.pop("jarvis.core.capabilities", None)
+
+
+def test_github_work_is_not_treated_as_external_integration() -> None:
+    """git/GitHub work is sub-agent-fulfillable (the worker has git + gh), so a
+    'commit and push' / 'open a PR' task must never be refused. Since
+    2026-07-21 it no longer FORCE-spawns without an explicit delegation trigger
+    (strict mode is explicit-only)."""
+    original = __import__("sys").modules.get("jarvis.core.capabilities")
+    try:
+        manager = _strict_manager_with_mock_registry()
+        utterance = "committe die Aenderungen und mach einen GitHub Pull Request"
+        assert manager._check_unsupported_intent(utterance) is None
+        assert not manager._should_force_spawn(utterance)
+    finally:
+        if original is not None:
+            __import__("sys").modules["jarvis.core.capabilities"] = original
+        else:
+            __import__("sys").modules.pop("jarvis.core.capabilities", None)
+
+
+class _FakeProfileForPrompt:
+    """Minimal UserProfile stand-in: only render_for_prompt is exercised."""
+
+    def render_for_prompt(self, *, max_chars: int = 2000) -> str:
+        return "## About the user\n- **Name:** Example User"
+
+
+class _FakeUpdateProfileTool:
+    name = "update_profile"
+    schema: dict[str, Any] = {}
+
+
+def test_system_prompt_includes_profile_write_directive_when_tool_wired() -> None:
+    """When update_profile is in the tool set and a user profile exists, the
+    system prompt must instruct the brain to persist durable personal facts.
+
+    Without this directive the (now sole) write path is dead: the legacy auto-
+    curator is soft-disabled, so the brain only learns structured facts if it
+    actively calls update_profile — which it will not do reliably unless told.
+    """
+    manager = BrainManager(
+        config=JarvisConfig(),
+        bus=EventBus(),
+        tools={"update_profile": _FakeUpdateProfileTool()},
+        tool_executor=_RecordingExecutor(),  # type: ignore[arg-type]
+        user_profile=_FakeProfileForPrompt(),
+    )
+    prompt = manager._build_system_prompt()
+    assert "PROFIL-PFLEGE" in prompt
+    assert "update_profile" in prompt
+
+
+def test_system_prompt_omits_profile_directive_when_tool_absent() -> None:
+    """No update_profile tool → no directive (never instruct a tool that is not
+    wired; that would contradict the hard 'do not invent tools' rule)."""
+    manager = BrainManager(
+        config=JarvisConfig(),
+        bus=EventBus(),
+        tools={"spawn_worker": _FakeTool()},
+        tool_executor=_RecordingExecutor(),  # type: ignore[arg-type]
+        user_profile=_FakeProfileForPrompt(),
+    )
+    prompt = manager._build_system_prompt()
+    assert "PROFIL-PFLEGE" not in prompt
+
+
+def test_system_prompt_contains_no_invent_tools_rule() -> None:
+    """The system prompt must carry the hard anti-invention rule in DE and EN.
+
+    Wording changed with PR-05 (2026-08-18): the rule is now scoped to tool
+    NAMES and to CLAIMS, because the old "never an action that is not in the
+    list above" sat under a list that did not contain the tools it named.
+    """
+    manager, _executor = _manager_with_spawn()
+    prompt = manager._build_system_prompt()
+    assert "erfinde niemals einen Werkzeugnamen" in prompt, (
+        "System prompt must contain the DE 'do not invent a tool name' rule"
+    )
+    assert "never invent a tool name" in prompt, (
+        "System prompt must contain the EN 'do not invent a tool name' rule"
+    )
+
+
+# ---------------------------------------------------------------------------
+# PR-05 / PR-06: the tool block must tell the truth, and the routing rules
+# must actually ship.
+# ---------------------------------------------------------------------------
+
+
+class _NamedFakeTool:
+    """Minimal Tool stand-in with an arbitrary name."""
+
+    schema: dict[str, Any] = {}
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def _manager_with_named_tools(*names: str) -> BrainManager:
+    return BrainManager(
+        config=JarvisConfig(),
+        bus=EventBus(),
+        tools={n: _NamedFakeTool(n) for n in names},
+        tool_executor=_RecordingExecutor(),  # type: ignore[arg-type]
+    )
+
+
+def test_system_prompt_lists_every_attached_tool_name() -> None:
+    """PR-05: the tool block is rendered from the LIVE surface.
+
+    The static capability seed knows none of these four, yet all four are
+    genuinely attached — the old block declared its 19-entry seed the
+    "vollständige Liste — keine anderen existieren" and thereby denied the
+    model tools it was holding.
+    """
+    manager = _manager_with_named_tools(
+        "search_web", "gmail", "update_profile", "set_config_value", "cli_gh"
+    )
+    prompt = manager._build_system_prompt()
+    for name in ("search_web", "gmail", "update_profile", "set_config_value", "cli_gh"):
+        assert name in prompt, f"attached tool {name!r} missing from the system prompt"
+
+
+def test_system_prompt_tool_block_names_are_callable_names() -> None:
+    """PR-05 (b): capability ids are not tool names.
+
+    ``tool.run-shell`` is what the registry render emitted; ``run_shell`` is
+    what the loop can resolve. The block must carry the callable spelling.
+    """
+    manager = _manager_with_named_tools("run_shell", "spawn_worker")
+    prompt = manager._build_system_prompt()
+    assert "run_shell" in prompt
+    assert "tool.run-shell" not in prompt
+    assert "REGISTRIERTE WERKZEUGE" not in prompt
+
+
+def test_system_prompt_tool_block_counts_the_tools_it_lists() -> None:
+    """The completeness claim must be backed by the number it states."""
+    names = tuple(f"tool_{i}" for i in range(7))
+    manager = _manager_with_named_tools(*names)
+    prompt = manager._build_system_prompt()
+    assert "vollständige Liste der 7 Namen" in prompt
+
+
+def test_system_prompt_tool_block_hides_local_action_tools() -> None:
+    """Local-action tools are hidden from the router schema on purpose.
+
+    Naming them would advertise tool names no provider request carries, so
+    the block filters them back out of ``_live_tool_names()``.
+    """
+    manager = _manager_with_named_tools("run_shell")
+    manager._local_action_tools = {"open_app": _NamedFakeTool("open_app")}
+    prompt = manager._build_system_prompt()
+    assert "run_shell" in prompt
+    assert "open_app" not in prompt
+
+
+def test_system_prompt_tool_block_omitted_without_tools() -> None:
+    """No tools attached → no completeness claim at all (the lie in reverse)."""
+    manager = BrainManager(
+        config=JarvisConfig(),
+        bus=EventBus(),
+        tools={},
+        tool_executor=_RecordingExecutor(),  # type: ignore[arg-type]
+    )
+    assert manager._render_live_tool_block() == ""
+
+
+def test_system_prompt_always_contains_tool_routing_rules() -> None:
+    """PR-06: the search_web-versus-cli_* rules used to be the ``else`` branch
+    of a capability render that is always truthy (the factory seeds the
+    registry on every brain build), so they never shipped. They are
+    unconditional now — including with a fully populated registry.
+    """
+    from jarvis.core.capabilities import get_registry
+    from jarvis.core.capabilities_seed import seed_registry
+
+    seed_registry(get_registry())
+    manager, _executor = _manager_with_spawn()
+    prompt = manager._build_system_prompt()
+    assert "TOOL-SELECTION-REGELN (strikt)" in prompt
+    assert "NICHT cli_supabase" in prompt
+    assert "'über X' = Search, 'mit X tun' = Action" in prompt
+
+
+def test_delegated_voice_budget_survives_a_multi_step_task() -> None:
+    """GT-11: 6 rounds / 20 s guillotined any task past about five steps.
+
+    The bounds stay ceilings — this pins that they are large enough for a
+    genuinely progressing turn and small enough to still end a runaway one.
+    """
+    from jarvis.brain.manager import _DELEGATE_DEADLINE_S, _DELEGATE_MAX_TURNS
+
+    assert _DELEGATE_MAX_TURNS >= 12
+    assert 30.0 <= _DELEGATE_DEADLINE_S <= 60.0
+
+
+@pytest.mark.parametrize(
+    "forbidden_phrase",
+    [
+        "mache ich",
+        "wird erledigt",
+        "ist gesendet",
+        "ist eingetragen",
+        "kümmere mich",
+    ],
+)
+def test_ack_brain_persona_de_forbids_action_promise_phrases(
+    forbidden_phrase: str,
+) -> None:
+    """PERSONA_PROMPT_DE must explicitly list each action-promise phrase as
+    forbidden so the ack-brain cannot emit fake confirmations."""
+    from jarvis.brain.ack_brain.persona_prompt import PERSONA_PROMPT_DE
+
+    assert forbidden_phrase in PERSONA_PROMPT_DE, (
+        f"PERSONA_PROMPT_DE must list forbidden action-promise phrase: {forbidden_phrase!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "forbidden_phrase",
+    [
+        "I'll do that",
+        "will be sent",
+        "will be scheduled",
+        "consider it done",
+    ],
+)
+def test_ack_brain_persona_en_forbids_action_promise_phrases(
+    forbidden_phrase: str,
+) -> None:
+    """PERSONA_PROMPT_EN must explicitly list each action-promise phrase as
+    forbidden so the ack-brain cannot emit fake confirmations."""
+    from jarvis.brain.ack_brain.persona_prompt import PERSONA_PROMPT_EN
+
+    assert forbidden_phrase in PERSONA_PROMPT_EN, (
+        f"PERSONA_PROMPT_EN must list forbidden action-promise phrase: {forbidden_phrase!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chunk B (jarvis-contacts) — contact tool registration + routing discipline.
+#
+# Three new router-tier tools: contact-lookup (safe), contact-upsert (monitor),
+# call-contact (ask). All append-only on the shared seams (ROUTER_TOOLS,
+# pyproject entry-points, this test, ADR-0011). The PFLICHT routing tests prove
+# the BUG-class `project_bug_subagent_not_natively_recognized` does NOT bite:
+# "schreib eine Mail an Christoph" and "ruf Christoph an" must stay router-tier
+# (no false refuse, no contextless worker spawn).
+# ---------------------------------------------------------------------------
+
+
+def test_contact_tools_in_router_tools() -> None:
+    """The three contact tools must live in ROUTER_TOOLS — the loader filters
+    entry-points against this frozenset, so a missing entry silently drops the
+    tool from the router schema."""
+    from jarvis.brain.factory import ROUTER_TOOLS
+
+    assert "contact-lookup" in ROUTER_TOOLS
+    assert "contact-upsert" in ROUTER_TOOLS
+    assert "call-contact" in ROUTER_TOOLS
+
+
+def test_contact_tools_not_in_local_action_set() -> None:
+    """Contact tools are router-tier reads/writes/actions, never in the
+    deterministic local-action worker fast-path (D9 recursion guard,
+    AP-5/AP-14)."""
+    from jarvis.brain.factory import _load_local_action_tools
+
+    local_tools = _load_local_action_tools(
+        bus=EventBus(),
+        harness_manager=None,
+        config=JarvisConfig(),
+    )
+    for name in ("contact-lookup", "contact-upsert", "call-contact"):
+        assert name not in local_tools
+
+
+def test_factory_wires_contact_tools_into_router_set() -> None:
+    """End-to-end wiring: entry-point + ROUTER_TOOLS + factory construction
+    branch connect, with the contracted risk tiers. A missing entry-point
+    registration (pip install -e .) or construction branch would silently drop
+    the tool from the router schema."""
+    from jarvis.brain.factory import _load_tools_for_tier
+
+    tools = _load_tools_for_tier(
+        "router",
+        bus=EventBus(),
+        executor=None,
+        harness_manager=None,
+        user_profile=None,
+        people=None,
+        config=JarvisConfig(),
+    )
+
+    assert tools["contact-lookup"].name == "contact-lookup"
+    assert tools["contact-lookup"].risk_tier == "safe"
+    assert tools["contact-upsert"].name == "contact-upsert"
+    assert tools["contact-upsert"].risk_tier == "monitor"
+    assert tools["call-contact"].name == "call-contact"
+    assert tools["call-contact"].risk_tier == "ask"
+
+
+def test_capability_seed_registers_contact_capabilities() -> None:
+    """The contact tools must be registered as capabilities so the gate routes
+    a named-person action to them instead of refusing/spawning. resolve_intent
+    must map a call/mail/save-by-name utterance to the contact surface."""
+    from jarvis.core.capabilities import get_registry
+    from jarvis.core.capabilities_seed import seed_registry
+
+    reg = get_registry()
+    seed_registry(reg)
+
+    call_cap = reg.resolve_intent("ruf Christoph an")
+    assert call_cap is not None and call_cap.id == "tool.call-contact"
+
+    save_cap = reg.resolve_intent("merk dir Christophs Nummer ist 0151 12345678")
+    assert save_cap is not None and save_cap.id == "tool.contact-upsert"
+
+
+def test_contact_capabilities_do_not_resolve_external_hard_negatives() -> None:
+    """Adding contact capabilities must NOT make the canonical hard-negatives
+    resolve — they must stay UNSUPPORTED (resolve_intent None) so the
+    anti-hallucination contract (test_capability_coupling_e2e) is preserved."""
+    from jarvis.core.capabilities import get_registry
+    from jarvis.core.capabilities_seed import seed_registry
+
+    reg = get_registry()
+    seed_registry(reg)
+    for utterance in (
+        "Schick eine Email an contact@example.com mit dem Betreff Hallo",
+        "Trag einen Termin morgen 10 Uhr ein",
+        "Sende eine WhatsApp an Mama",
+        "Bestelle eine Pizza",
+        "Poste auf X dass ich heute frei habe",
+    ):
+        assert reg.resolve_intent(utterance) is None, (
+            f"contact capabilities must not resolve hard-negative {utterance!r}"
+        )
+
+
+# --- PFLICHT-Tests: mail-by-name + call-by-name stay router-tier ------------
+#
+# Built against the REAL seeded CapabilityRegistry (the conftest snapshot/
+# restores it). The gate (`_check_unsupported_intent`) must NOT refuse and the
+# force-spawn heuristic (`_should_force_spawn`) must NOT spawn — the router
+# brain then reaches contact-lookup + gmail / call-contact natively.
+
+
+def _strict_manager_with_seeded_registry() -> BrainManager:
+    """A strict-mode manager (production default) over the REAL seeded
+    registry — exactly the production gate path for these utterances."""
+    from jarvis.core.capabilities import get_registry
+    from jarvis.core.capabilities_seed import seed_registry
+
+    seed_registry(get_registry())
+    manager, _executor = _manager_with_spawn(force_spawn_mode="strict")
+    return manager
+
+
+def test_mail_by_name_stays_router_tier() -> None:
+    """'schreib eine Mail an Christoph' must NOT be refused and must NOT spawn a
+    contextless worker — it stays router-tier so the brain calls contact-lookup
+    then gmail. BUG-class project_bug_subagent_not_natively_recognized."""
+    manager = _strict_manager_with_seeded_registry()
+    utterance = "schreib eine Mail an Christoph"
+    assert manager._check_unsupported_intent(utterance) is None, (
+        "mail-by-name must not be refused as unsupported"
+    )
+    assert manager._should_force_spawn(utterance) is False, (
+        "mail-by-name must not force-spawn a contextless worker"
+    )
+
+
+def test_call_by_name_stays_router_tier() -> None:
+    """'ruf Christoph an' must NOT be refused and must NOT spawn — it stays
+    router-tier so the brain calls call-contact. Without the call-contact
+    capability this utterance force-spawns a generic worker (the live bug)."""
+    manager = _strict_manager_with_seeded_registry()
+    utterance = "ruf Christoph an"
+    assert manager._check_unsupported_intent(utterance) is None, (
+        "call-by-name must not be refused as unsupported"
+    )
+    assert manager._should_force_spawn(utterance) is False, (
+        "call-by-name must not force-spawn a contextless worker"
+    )
+
+
+def test_voice_save_contact_stays_router_tier() -> None:
+    """'merk dir, Christophs Nummer ist …' must stay router-tier so the brain
+    calls contact-upsert — never refused, never spawned."""
+    manager = _strict_manager_with_seeded_registry()
+    utterance = "merk dir, Christophs Nummer ist 0151 12345678"
+    assert manager._check_unsupported_intent(utterance) is None
+    assert manager._should_force_spawn(utterance) is False
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "ruf Christoph an",
+        "ruf Beispielkontakt an",
+        "call Christoph",
+    ],
+)
+def test_call_by_name_resolves_to_call_contact_capability(utterance: str) -> None:
+    """The call-by-name surface resolves to the call-contact capability (not a
+    generic worker), which is exactly what flips _is_generic_subagent_work from
+    spawn to no-spawn."""
+    from jarvis.core.capabilities import get_registry
+    from jarvis.core.capabilities_seed import seed_registry
+
+    reg = get_registry()
+    seed_registry(reg)
+    cap = reg.resolve_intent(utterance)
+    assert cap is not None and cap.id == "tool.call-contact"
+
+
+# ---------------------------------------------------------------------------
+# Heavy-research force-spawn (live bug 2026-06-14, a long-haul trip-research turn):
+# a multi-step research/analysis request must OFFLOAD to a background mission
+# instead of running inline on the deep brain (where it blew the ~20 s voice
+# budget and was beheaded → silence). Conjunctive gate: a research/analysis
+# VERB must be present AND a heaviness signal. Length alone never spawns, so a
+# quick "recherchier das mal kurz" stays inline.
+# ---------------------------------------------------------------------------
+
+_HEAVY_RESEARCH_SHOULD_SPAWN = [
+    # The live failure (two research verbs + horizon marker + length).
+    (
+        "Ich möchte, dass du mir dabei hilfst, zu recherchieren, was ich für "
+        "eine Reise von Lissabon nach Tokio brauche, und analysiere auch den "
+        "Wetterbericht der nächsten zwei Wochen."
+    ),
+    # Two verbs (analysieren + vergleichen) → multi-clause.
+    "Analysiere die letzten zwölf Monate meiner Ausgaben und vergleiche sie mit dem Vorjahr",
+    # English: two verbs + horizon marker.
+    "Research the top five vector databases and compare them over the next quarter",
+    # One verb + requirements marker ("brauche").
+    "Recherchiere ausführlich, was ich für meinen Umzug in eine andere Stadt alles brauche",
+]
+
+_HEAVY_RESEARCH_STAYS_INLINE = [
+    "Was ist das Wetter in Melbourne?",  # no research verb → fast lookup
+    "Wie spät ist es in Sydney?",  # no research verb
+    "Recherchier das mal kurz",  # verb but no scope (short, 1 verb, no marker)
+    "Analysier kurz den Satz",  # verb but no scope
+    "Wie geht's dir?",  # smalltalk, no verb
+]
+
+
+@pytest.mark.parametrize("utterance", _HEAVY_RESEARCH_SHOULD_SPAWN)
+def test_is_heavy_research_should_spawn(utterance: str) -> None:
+    manager, _ = _manager_with_spawn(force_spawn_mode="strict")
+    assert manager._is_heavy_research(utterance) is True
+
+
+@pytest.mark.parametrize("utterance", _HEAVY_RESEARCH_STAYS_INLINE)
+def test_is_heavy_research_stays_inline(utterance: str) -> None:
+    manager, _ = _manager_with_spawn(force_spawn_mode="strict")
+    assert manager._is_heavy_research(utterance) is False
+
+
+# ---------------------------------------------------------------------------
+# User mandate (2026-06-15): "When I say subagent, it HAS to spawn a subagent."
+#
+# An EXPLICIT heavy-work trigger ("subagent", "spawn", "jarvis-agent",
+# "openclaw" legacy alias, "delegate", …) names the execution vehicle — it is
+# an UNAMBIGUOUS spawn request and must outrank the disambiguation guards
+# that exist only to suppress AMBIGUOUS, implicit spawns: the
+# instructional/pointer/navigation/smalltalk/open-app
+# guards in ``_should_force_spawn`` AND, end-to-end through ``generate()``, the
+# capability "I can't do that" refusal and the navigation fast-path. The bug:
+# those guards were checked BEFORE the explicit-trigger check, so a phrasing
+# that also tripped one of them was silently NOT spawned ("sometimes saying
+# subagent doesn't spawn a subagent").
+# ---------------------------------------------------------------------------
+
+# Each of these contains an explicit trigger AND trips a disambiguation guard
+# that today returns False before the trigger is ever evaluated:
+#   - "Starte/Öffne OpenClaw"  → is_open_app_intent (start\w*/open\w* + no veto)
+#   - subagent + "zeig … Socials" → match_navigation_intent (section hit)
+_EXPLICIT_TRIGGER_OVERRIDES_GUARDS = [
+    "Starte OpenClaw",
+    "Öffne OpenClaw",  # i18n-allow: German voice fixture (routing content under test)
+    "Spawne einen Subagenten und zeig mir die Socials",  # i18n-allow: German voice fixture
+    "Kannst du einen Subagenten spawnen und mir die Socials zeigen?",  # i18n-allow
+]
+
+
+@pytest.mark.parametrize("utterance", _EXPLICIT_TRIGGER_OVERRIDES_GUARDS)
+def test_explicit_trigger_outranks_disambiguation_guards(utterance: str) -> None:
+    """An explicit force-spawn trigger must force-spawn even when the utterance
+    also looks like an app-open or a UI-navigation command. The disambiguation
+    guards only suppress AMBIGUOUS implicit spawns — naming the vehicle is
+    unambiguous (User mandate 2026-06-15)."""
+    manager, _ = _manager_with_spawn(force_spawn_mode="strict")
+    assert manager._should_force_spawn(utterance) is True, (
+        f"explicit-trigger utterance {utterance!r} did NOT force-spawn — a "
+        "disambiguation guard swallowed the explicit request"
+    )
+
+
+def _seeded_strict_manager_with_local_actions() -> tuple[BrainManager, _RecordingExecutor]:
+    """Strict-mode manager over the REAL seeded registry, with spawn_worker AND
+    the local-action tools wired — the exact production gate path for the
+    end-to-end ``generate()`` mandate tests."""
+    from jarvis.core.capabilities import get_registry
+    from jarvis.core.capabilities_seed import seed_registry
+
+    seed_registry(get_registry())
+    executor = _RecordingExecutor()
+    config = JarvisConfig()
+    config.brain.routing.force_spawn_mode = "strict"
+    manager = BrainManager(
+        config=config,
+        bus=EventBus(),
+        tools={"spawn_worker": _FakeTool()},
+        local_action_tools={
+            "open_app": _FakeOpenAppTool(),
+            "type_text": _FakeTypeTextTool(),
+            "hotkey": _FakeHotkeyTool(),
+        },
+        tool_executor=executor,  # type: ignore[arg-type]
+    )
+    manager._vision_provider = _VisionShouldNotRun()
+    return manager, executor
+
+
+def _spawn_calls(executor: _RecordingExecutor) -> list[Any]:
+    return [c for c in executor.calls if getattr(c[0], "name", "") == "spawn_worker"]
+
+
+# Explicit subagent requests whose TASK also needs an external integration the
+# worker cannot reach (book a trip, send mail). Today the capability gate
+# refuses them ("Das kann ich noch nicht") BEFORE force-spawn, so the explicit
+# "subagent" mention never spawns. Per the mandate, the explicit trigger wins:
+# spawn the universal worker (it does its best / reports honestly).
+_EXPLICIT_SUBAGENT_OVER_REFUSAL = [
+    "Spawn a subagent to book a trip to Berlin",
+    "Spawne einen Subagenten und schick eine Email an meinen Chef",  # i18n-allow
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("utterance", _EXPLICIT_SUBAGENT_OVER_REFUSAL)
+async def test_explicit_subagent_spawns_over_capability_refusal(utterance: str) -> None:
+    """End-to-end through ``generate()``: an explicit subagent request must
+    dispatch spawn_worker even when the task looks like an unsupported external
+    integration — it must NOT be swallowed by the capability refusal gate."""
+    manager, executor = _seeded_strict_manager_with_local_actions()
+    await manager.generate(utterance)
+    assert _spawn_calls(executor), (
+        f"explicit subagent request {utterance!r} did NOT spawn a worker — the "
+        "capability refusal gate swallowed it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_subagent_outranks_navigation_fast_path() -> None:
+    """End-to-end through ``generate()``: a nav-tail combo that names an explicit
+    subagent trigger ('Spawne einen Subagenten UND zeig mir die Socials') must
+    dispatch spawn_worker — the deterministic navigation fast-path must stand
+    down for an explicit trigger (mirrors AD-S9: the named vehicle wins)."""
+    from jarvis.core.capabilities import get_registry
+    from jarvis.core.capabilities_seed import seed_registry
+
+    seed_registry(get_registry())
+    executor = _RecordingExecutor()
+    config = JarvisConfig()
+    config.brain.routing.force_spawn_mode = "strict"
+    manager = BrainManager(
+        config=config,
+        bus=EventBus(),
+        tools={"spawn_worker": _FakeTool(), "navigate": _FakeNavigateTool()},
+        local_action_tools={"open_app": _FakeOpenAppTool()},
+        tool_executor=executor,  # type: ignore[arg-type]
+    )
+    manager._vision_provider = _VisionShouldNotRun()
+    await manager.generate(
+        "Spawne einen Subagenten und zeig mir die Socials"  # i18n-allow: German voice fixture
+    )
+    assert _spawn_calls(executor), (
+        "explicit subagent + navigation tail did NOT spawn — the navigation "
+        "fast-path swallowed the explicit trigger"
+    )
+    assert not any(
+        getattr(c[0], "name", "") == "navigate" for c in executor.calls
+    ), "navigation fast-path ran instead of standing down for the explicit trigger"
+
+
+@pytest.mark.asyncio
+async def test_external_task_without_trigger_still_refuses() -> None:
+    """No-regression: WITHOUT an explicit trigger, an unsupported external task
+    must STILL be refused honestly (no spawn). Only the explicit 'subagent'/
+    'spawn' mention bypasses the refusal — the gate is not weakened globally."""
+    manager, executor = _seeded_strict_manager_with_local_actions()
+    reply = await manager.generate(
+        "Buche mir einen Flug nach Berlin"  # i18n-allow: German voice fixture
+    )
+    assert not _spawn_calls(executor), (
+        "an unsupported external task WITHOUT an explicit trigger must not spawn"
+    )
+    assert reply, "expected an honest refusal reply, got empty"
+
+
+def test_heavy_research_never_force_spawns_without_explicit_trigger() -> None:
+    """Maintainer mandate 2026-07-21 (strict mode is explicit-only): heavy
+    research does NOT force-spawn a mission — not even when it asks for a
+    BUILT ARTIFACT — unless the turn carries an explicit delegation trigger
+    (``force_spawn_phrases``: "spawn", "Subagent", "deep dive", the DE depth
+    markers, …). Supersedes Option A (2026-06-15), which offloaded
+    artifact-building research implicitly. The classifiers themselves stay
+    intact (pinned here) — the router LLM uses the inline path or OFFERS
+    delegation via jarvis.brain.spawn_gate."""
+    manager, _ = _manager_with_spawn(force_spawn_mode="strict")
+    # Answer-only heavy research -> INLINE (unchanged since Option A).
+    answer_only = _HEAVY_RESEARCH_SHOULD_SPAWN[0]
+    assert manager._is_heavy_research(answer_only) is True
+    assert manager._should_force_spawn(answer_only) is False, (
+        "answer-only heavy research must route inline"
+    )
+    # Heavy research that BUILDS a file/report: classifiers still fire, but the
+    # spawn now requires an explicit delegation trigger.
+    artifact = (
+        "Research and compare the top five vector databases, then write a "
+        "detailed comparison report into a file named compare.md"
+    )
+    assert manager._is_heavy_research(artifact) is True
+    assert manager._research_wants_artifact(artifact) is True
+    assert manager._should_force_spawn(artifact) is False, (
+        "artifact research without an explicit delegation trigger must not "
+        "force-spawn (mandate 2026-07-21)"
+    )
+    # The same request WITH an explicit depth trigger still spawns.
+    explicit = (
+        "Mach einen Deep Dive: research the top five vector databases and "
+        "write a comparison report into compare.md"
+    )
+    assert manager._should_force_spawn(explicit) is True, (
+        "an explicit delegation/depth trigger must still force-spawn"
+    )
+
+
+def test_quick_weather_lookup_does_not_force_spawn() -> None:
+    """A quick weather lookup must STILL stay inline (no false spawn)."""
+    manager, _ = _manager_with_spawn(force_spawn_mode="strict")
+    assert manager._should_force_spawn("Was ist das Wetter in Melbourne?") is False
+
+
+def test_heavy_research_disabled_flag_restores_inline() -> None:
+    """With the kill switch off, heavy research is no longer force-spawned."""
+    manager, _ = _manager_with_spawn(force_spawn_mode="strict")
+    manager._config.brain.routing.heavy_research_enabled = False
+    assert manager._is_heavy_research(_HEAVY_RESEARCH_SHOULD_SPAWN[0]) is False
+
+
+def test_research_question_answer_deliverable_routes_inline_not_spawned() -> None:
+    """Option A (2026-06-15): a research QUESTION whose deliverable is an ANSWER
+    (a comparison / overview / recommendation) must be answered INLINE via the
+    router's search_web tool, NOT offloaded to a sub-agent mission.
+
+    The Worker->Critic pipeline verifies BUILT ARTIFACTS via git diff; it is
+    structurally hostile to an answer-only research turn — it cannot grade a
+    spoken answer or independently verify a web citation, so the request hits the
+    empty-diff veto and loops to critic_loop_exhausted (live mission 019ecb56:
+    "research the AI news of the last years" failed at 1042s). It is STILL heavy
+    research (the detector keeps firing), but the spawn DECISION must send an
+    answer-only request inline. Only an explicit mission phrase (handled earlier
+    in _should_force_spawn) or an artifact/file request offloads to a mission."""
+    manager, _ = _manager_with_spawn(force_spawn_mode="strict")
+    # Two research verbs (research + compare) -> detected as heavy research, but
+    # the deliverable is an ANSWER: no file, no build verb, no explicit phrase.
+    prompt = "Research the leading AI language models and compare their strengths."
+    assert manager._is_heavy_research(prompt) is True, (
+        "precondition: a 2-verb research request IS detected as heavy research"
+    )
+    assert manager._should_force_spawn(prompt) is False, (
+        "answer-deliverable research must route inline, not force-spawn a mission"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Drag-dropped mission recap (ui.web.ws.mission_inject) — must be DISCUSSED
+# inline, NEVER re-dispatched as a new mission.
+#
+# Live doom-loop 2026-06-16 (missions.db 019ed04e / 019ed051): the user dragged
+# a finished/failed mission card onto the JarvisDock to get a recap. The recap
+# directive embeds the dropped card's OWN text verbatim, so a title that
+# contains a spawn trigger ("sub-agent") or an action verb ("Write …") leaks
+# that trigger back into the directive -> the router force-spawned a NEW mission
+# whose deliverable is a conversational recap (no file) -> empty diff ->
+# critic_loop_exhausted -> FAILED. Each failed mission the user dragged to
+# understand spawned another failed mission: every recent mission "failed".
+#
+# A dropped-card recap is a CONVERSATION, never new work (mission_inject.py:
+# "a dropped mission is discussed, never re-dispatched"). The router must
+# exempt the ``ui.web.ws.mission_inject`` source from force-spawn regardless of
+# what the quoted title contains.
+# ---------------------------------------------------------------------------
+
+MISSION_INJECT_SOURCE = MISSION_INJECT_SOURCE_LAYER
+
+
+def test_mission_inject_source_layer_parity() -> None:
+    """Anti-drift: the producer's source_layer must be in the router's exempt
+    set, else a recap silently force-spawns again (multi-layer string drift)."""
+    from jarvis.brain.manager import _NON_SPAWN_SOURCE_LAYERS
+
+    assert MISSION_INJECT_SOURCE_LAYER in _NON_SPAWN_SOURCE_LAYERS
+
+
+def test_drop_source_layer_parity() -> None:
+    """Anti-drift: a dropped file/content directive (ui.drop) must be exempt
+    from force-spawn — it is reacted to inline, never auto-dispatched as a
+    worker (parity with mission_inject; AP-5/AP-14, anti-doom-loop)."""
+    from jarvis.brain.drop_context import DROP_SOURCE_LAYER
+    from jarvis.brain.manager import _NON_SPAWN_SOURCE_LAYERS
+
+    assert DROP_SOURCE_LAYER in _NON_SPAWN_SOURCE_LAYERS
+
+
+def test_dropped_file_directive_is_never_force_spawned() -> None:
+    """A drop directive carrying an action verb must still be discussed inline
+    when stamped with the ui.drop source marker."""
+    from jarvis.brain.drop_context import DROP_SOURCE_LAYER
+
+    manager, _ = _manager_with_spawn(force_spawn_mode="permissive")
+    directive = "Open this file and fix the bug you find in it."
+    # Precondition: WITHOUT the drop source this DOES force-spawn.
+    assert manager._should_force_spawn(directive) is True
+    # WITH the drop source it must be answered inline, never spawned.
+    assert (
+        manager._should_force_spawn(directive, source_layer=DROP_SOURCE_LAYER)
+        is False
+    ), "a dropped-file directive must be reacted to inline, never re-dispatched"
+
+
+def test_dropped_mission_recap_is_never_force_spawned() -> None:
+    """A mission.inject recap directive must not trip the force-spawn heuristic."""
+    from jarvis.ui.web.mission_inject import compose_mission_inject_text
+
+    manager, _ = _manager_with_spawn()
+    # A dropped card whose own text carries a spawn trigger — the verbatim title
+    # leaks "sub-agent" into the composed recap directive.
+    recap = compose_mission_inject_text(
+        {
+            "utterance": "spawn a sub-agent that writes a 200-word story to a file",
+            "status": "error",
+        }
+    )
+    assert recap is not None
+    # Precondition: WITHOUT the inject source this directive DOES force-spawn,
+    # so the exemption (not a weak trigger) is what suppresses it.
+    assert manager._should_force_spawn(recap) is True, (
+        "precondition: the quoted spawn trigger makes this directive force-spawn"
+    )
+    # WITH the inject source it must be answered inline, never spawned.
+    assert (
+        manager._should_force_spawn(recap, source_layer=MISSION_INJECT_SOURCE)
+        is False
+    ), "a dropped-card recap must be discussed inline, never re-dispatched"
+
+
+@pytest.mark.asyncio
+async def test_force_spawn_worker_skips_dropped_mission_recap() -> None:
+    """The deterministic dispatch path must not spawn a worker for a recap."""
+    from jarvis.ui.web.mission_inject import compose_mission_inject_text
+
+    manager, executor = _manager_with_spawn()
+    recap = compose_mission_inject_text(
+        {
+            "utterance": "spawn a sub-agent that writes a 200-word story to a file",
+            "status": "error",
+        }
+    )
+    result = await manager._force_spawn_worker(
+        recap, source_layer=MISSION_INJECT_SOURCE
+    )
+    assert result is None, "no mission for a dropped-card recap"
+    assert executor.calls == [], "zero spawn_worker dispatches for a recap turn"
+
+
+# ---------------------------------------------------------------------------
+# Knowledge-question spawn-hide (forensic 2026-06-27, voice session 08:35):
+# "Welche Unternehmen haben so viel Speicherplatz?" was a pure factual question,
+# yet the router-LLM reflexively CHOSE spawn_worker and announced "ich ziehe
+# einen Experten hinzu". The deterministic force-spawn gate correctly stands
+# down on such a turn (it only FORCES spawns, it never CONSTRAINS the LLM's own
+# spawn reflex). The fix mirrors the smalltalk tool-hide: on a plain knowledge
+# question the spawn tools are removed from the per-turn LLM surface, so the
+# model cannot grab spawn_worker against its own prompt rule. Read/search tools
+# stay visible so the question is still answerable inline.
+# ---------------------------------------------------------------------------
+
+
+class _FakeSearchTool:
+    name = "search_web"
+    schema: dict[str, Any] = {}
+
+
+def _manager_with_spawn_and_search() -> BrainManager:
+    executor = _RecordingExecutor()
+    manager = BrainManager(
+        config=JarvisConfig(),
+        bus=EventBus(),
+        tools={"spawn_worker": _FakeTool(), "search_web": _FakeSearchTool()},
+        tool_executor=executor,  # type: ignore[arg-type]
+    )
+    return manager
+
+
+PLAIN_KNOWLEDGE_QUESTIONS = [
+    "Welche Unternehmen haben so viel Speicherplatz?",
+    "Welche Firmen besitzen so viele Rechenzentren?",
+    "Wie viele Menschen leben in Australien?",
+    "Which companies own that much storage?",
+    "Was ist der groesste Cloud-Anbieter der Welt?",
+]
+
+
+@pytest.mark.parametrize("utterance", PLAIN_KNOWLEDGE_QUESTIONS)
+def test_plain_knowledge_question_hides_spawn_worker(utterance: str) -> None:
+    """A pure factual/knowledge question removes spawn_worker from the per-turn
+    LLM tool surface, while keeping the read/search tools to answer inline."""
+    manager = _manager_with_spawn_and_search()
+    gated = manager._hide_spawn_on_knowledge_question(dict(manager._tools), utterance)
+    assert "spawn_worker" not in gated, (
+        f"spawn_worker must be hidden on a plain knowledge question: {utterance!r}"
+    )
+    assert "search_web" in gated, "search_web must stay visible to answer inline"
+
+
+BUILD_OR_ACTION_REQUESTS = [
+    "Bau mir eine HTML-Uebersicht der groessten Cloud-Anbieter",
+    "Schreib mir einen Bericht ueber Rechenzentren in eine Datei",
+]
+
+
+@pytest.mark.parametrize("utterance", BUILD_OR_ACTION_REQUESTS)
+def test_build_request_keeps_spawn_worker(utterance: str) -> None:
+    """A request that BUILDS a deliverable keeps spawn_worker available — the
+    artifact gate must not be stripped by the knowledge-question hide."""
+    manager = _manager_with_spawn_and_search()
+    gated = manager._hide_spawn_on_knowledge_question(dict(manager._tools), utterance)
+    assert "spawn_worker" in gated, (
+        f"spawn_worker must stay for a build request: {utterance!r}"
+    )
+
+
+def test_explicit_subagent_question_keeps_spawn_worker() -> None:
+    """Even in question form, an explicitly named heavy-work vehicle keeps the
+    spawn tool — the user named the vehicle, respect it (AD-S9)."""
+    manager = _manager_with_spawn_and_search()
+    gated = manager._hide_spawn_on_knowledge_question(
+        dict(manager._tools),
+        "Kannst du einen Subagenten spawnen der die groessten Cloud-Anbieter recherchiert?",
+    )
+    assert "spawn_worker" in gated, (
+        "an explicit 'Subagent' trigger must never be hidden, even in question form"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Signalless-turn action-hide (forensic 2026-06-27, voice session): the German
+# smalltalk "Was geht ab?" was mis-transcribed by STT as "Lask it up!" [en]
+# confidence 0.509 — missing BOTH the smalltalk allowlist AND the whisper-junk
+# seed lists — so the action tools stayed visible and gemini, reading a
+# 30k-token context full of the PREVIOUS "open Discord, bridge-mine channel"
+# command, re-ran that exact computer_use plan on a turn that asked for nothing.
+# A short turn with no actionable signal of its own must not reach computer_use
+# / spawn so it cannot inherit the prior turn's desktop action.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCuTool:
+    name = "computer_use"
+    schema: dict[str, Any] = {}
+
+
+def _manager_with_cu_spawn_search() -> BrainManager:
+    executor = _RecordingExecutor()
+    return BrainManager(
+        config=JarvisConfig(),
+        bus=EventBus(),
+        tools={
+            "computer_use": _FakeCuTool(),
+            "spawn_worker": _FakeTool(),
+            "search_web": _FakeSearchTool(),
+        },
+        tool_executor=executor,  # type: ignore[arg-type]
+    )
+
+
+# User mandate 2026-06-27 ("this must apply to ALL questions"): a turn with no
+# action signal of its own — short or long, with or without a trailing "?" —
+# cannot inherit the previous turn's CU action. Since 2026-08-17 the hide is
+# gated on the evidence that makes inheritance possible at all: a desktop
+# episode that is live or just ended. Cold, the vehicle stays — see
+# tests/unit/brain/test_signalless_action_vehicles.py.
+NO_ACTION_SIGNAL_TURNS = [
+    "Lask it up!",                                   # the live STT junk
+    "Mask it up.",                                   # sibling STT-junk variant
+    "Was geht ab?",                                  # i18n-allow: the original question
+    "Wie viele Menschen leben in Australien?",       # i18n-allow: long factual question
+    "Which company owns the most data centers in the world right now?",
+    "Erzaehl mir einen Witz",                        # i18n-allow: chit-chat, no action
+]
+
+
+@pytest.mark.parametrize("utterance", NO_ACTION_SIGNAL_TURNS)
+def test_no_action_signal_turn_hides_computer_use_and_spawn(utterance: str) -> None:
+    """Inside a live desktop episode, ANY turn with no action signal of its own
+    (question, remark, or mis-transcription — regardless of length or a trailing
+    '?') cannot reach computer_use/spawn, so the LLM cannot inherit the previous
+    turn's CU action. The read-only search tool stays visible so the turn is
+    still answerable."""
+    manager = _manager_with_cu_spawn_search()
+    manager._desktop_episode_is_live = lambda: True  # type: ignore[method-assign]
+    gated = manager._hide_action_tools_on_signalless_turn(
+        dict(manager._tools), utterance
+    )
+    assert "computer_use" not in gated, (
+        f"computer_use must be hidden on a no-action-signal turn: {utterance!r}"
+    )
+    assert "spawn_worker" not in gated, (
+        f"spawn_worker must be hidden on a no-action-signal turn: {utterance!r}"
+    )
+    assert "search_web" in gated, "read-only search_web must stay visible"
+
+
+ACTIONABLE_TURNS = [
+    "Oeffne Discord fuer mich",            # explicit open-app intent
+    "Klick auf den Play-Button",           # PC-control verb
+    "Mach das am Bildschirm",              # names the screen surface
+    "Was siehst du auf meinem Bildschirm?",  # i18n-allow: a VISUAL question keeps CU (Bildschirm)
+    "Bau mir eine HTML-Uebersicht der groessten Cloud-Anbieter",  # artifact build
+]
+
+
+@pytest.mark.parametrize("utterance", ACTIONABLE_TURNS)
+def test_actionable_turn_keeps_computer_use(utterance: str) -> None:
+    """A turn that DOES carry an action signal — an action verb, a named app, the
+    screen surface, or an artifact-build request — keeps computer_use. This holds
+    even for a question ('Was siehst du auf meinem Bildschirm?'): naming the
+    screen is action-intent, so the heavy tools stay available."""
+    manager = _manager_with_cu_spawn_search()
+    gated = manager._hide_action_tools_on_signalless_turn(
+        dict(manager._tools), utterance
+    )
+    assert "computer_use" in gated, (
+        f"computer_use must stay for an actionable turn: {utterance!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# PC-control run-skill hide (forensic 2026-07-02, voice session 20:28): the
+# explicit desktop request "ein Terminal oeffnen, Cloud-Code oeffnen, … und
+# fuer mich ein Prompt geben …" (STT-garbled "Claude Code") ALSO mentioned
+# looking for bugs, so the SKILLS-FIRST router rule ("when in doubt, call the
+# skill") let the semantically-similar cloud-debug skill hijack the turn:
+# run-skill returned its mission directive, the model followed neither it nor
+# computer_use, and spoke the dictated capability refusal ("mir fehlt dafuer
+# das passende Werkzeug"). The vehicle the user NAMES (the desktop) must
+# outrank a loose skill CONTENT match — run-skill leaves the surface on such a
+# turn so computer_use stays authoritative.
+# ---------------------------------------------------------------------------
+
+
+class _FakeRunSkillTool:
+    name = "run-skill"
+    schema: dict[str, Any] = {}
+
+
+def _manager_with_cu_runskill_search() -> BrainManager:
+    executor = _RecordingExecutor()
+    return BrainManager(
+        config=JarvisConfig(),
+        bus=EventBus(),
+        tools={
+            "computer_use": _FakeCuTool(),
+            "run-skill": _FakeRunSkillTool(),
+            "search_web": _FakeSearchTool(),
+        },
+        tool_executor=executor,  # type: ignore[arg-type]
+    )
+
+
+# The live incident transcript (STT-garbled: "Cloud-Code" = Claude Code) plus
+# simpler members of the same class: the user names the DESKTOP as vehicle.
+PC_CONTROL_TURNS_THAT_MUST_NOT_REACH_RUN_SKILL = [
+    (
+        # i18n-allow: live incident transcript under test
+        "Kannst du bitte für mich mal für mich ein Terminal öffnen, Cloud-Code "
+        "öffnen, in den Jarvis-Vorordnern, in das Jarvis-Directly-Renavigieren "
+        "und für mich ein Prompt geben, und zwar, dass er mal einen kompletten "
+        "Deep-Dive machen soll und gucken, ob es irgendwelche Bugs gibt. Er soll "
+        "nur ein Report schreiben und keine einzige Datei verändern oder löschen "
+        "oder sowas etc."
+    ),
+    "Oeffne ein Terminal und starte Claude Code",  # i18n-allow: German voice command under test
+    "Klick auf den Play-Button",                   # i18n-allow: German voice command under test
+    "Open a terminal and type npm install",
+]
+
+
+@pytest.mark.parametrize("utterance", PC_CONTROL_TURNS_THAT_MUST_NOT_REACH_RUN_SKILL)
+def test_pc_control_turn_hides_run_skill_keeps_computer_use(utterance: str) -> None:
+    """An explicit desktop request (open an app/terminal, click, type) must not
+    be hijackable by a semantically-similar skill: run-skill leaves the surface,
+    computer_use stays."""
+    manager = _manager_with_cu_runskill_search()
+    gated = manager._hide_run_skill_on_pc_control_turn(
+        dict(manager._tools), utterance
+    )
+    assert "run-skill" not in gated, (
+        f"run-skill must be hidden on a pc-control turn: {utterance!r}"
+    )
+    assert "computer_use" in gated, "computer_use must stay authoritative"
+    assert "search_web" in gated, "unrelated tools must be untouched"
+
+
+NON_PC_CONTROL_SKILL_TURNS = [
+    "Wie sieht mein Tag aus?",          # i18n-allow: morning-routine skill trigger under test
+    "Finde den Bug im Login-Test",      # i18n-allow: cloud-debug-shaped task, no desktop vehicle
+    "What does my day look like?",
+]
+
+
+@pytest.mark.parametrize("utterance", NON_PC_CONTROL_SKILL_TURNS)
+def test_non_pc_control_turn_keeps_run_skill(utterance: str) -> None:
+    """A turn without a desktop-vehicle signal keeps run-skill — skills stay
+    first-class for the kind of task they exist for."""
+    manager = _manager_with_cu_runskill_search()
+    gated = manager._hide_run_skill_on_pc_control_turn(
+        dict(manager._tools), utterance
+    )
+    assert "run-skill" in gated, (
+        f"run-skill must stay on a non-pc-control turn: {utterance!r}"
+    )
+
+
+def test_explicit_skill_request_keeps_run_skill_even_on_pc_control_turn() -> None:
+    """The user literally naming a skill is its own vehicle — it must never be
+    vetoed, even when the same turn opens an app (mirrors AD-S9 for spawn)."""
+    manager = _manager_with_cu_runskill_search()
+    gated = manager._hide_run_skill_on_pc_control_turn(
+        dict(manager._tools),
+        # i18n-allow: German voice command under test
+        "Oeffne Chrome und nutz den Skill browser-tabs",
+    )
+    assert "run-skill" in gated, "an explicit skill request must keep run-skill"
+
+
+def test_run_skill_stays_when_computer_use_absent() -> None:
+    """On a host without the CU harness the gate must stand down — hiding
+    run-skill there would leave the desktop request with NO handler at all."""
+    executor = _RecordingExecutor()
+    manager = BrainManager(
+        config=JarvisConfig(),
+        bus=EventBus(),
+        tools={"run-skill": _FakeRunSkillTool(), "search_web": _FakeSearchTool()},
+        tool_executor=executor,  # type: ignore[arg-type]
+    )
+    gated = manager._hide_run_skill_on_pc_control_turn(
+        # i18n-allow: German voice command under test
+        dict(manager._tools), "Oeffne ein Terminal und starte Claude Code"
+    )
+    assert "run-skill" in gated, (
+        "without computer_use in the surface the gate must not hide run-skill"
+    )
+
+
+def test_pc_control_run_skill_gate_is_fault_tolerant() -> None:
+    """Any fault (non-dict surface) returns the tools unchanged — a gate bug
+    must never blind the brain."""
+    manager = _manager_with_cu_runskill_search()
+    sentinel = object()
+    assert manager._hide_run_skill_on_pc_control_turn(sentinel, "Oeffne Chrome") is sentinel  # type: ignore[arg-type]  # i18n-allow: German voice command under test
+
+
+# ---------------------------------------------------------------------------
+# Agentic-IDE workspace tool gate (2026-07-28 cost audit): the pane-scoped
+# agentic-ide-* tools only make sense relative to an OPEN workspace. With none
+# open they can only fail, while their schemas cost ~10 KB of input on every
+# tool-loop iteration. agentic-ide-status (honest "nothing is open" answer)
+# and agentic-ide-resume (the command that OPENS a workspace by voice) must
+# never be hidden.
+# ---------------------------------------------------------------------------
+
+
+class _FakeIdeTool:
+    schema: dict[str, Any] = {}
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def _manager_with_ide_tools() -> BrainManager:
+    tools = {
+        name: _FakeIdeTool(name)
+        for name in (
+            "agentic-ide-status",
+            "agentic-ide-resume",
+            "agentic-ide-prompt",
+            "agentic-ide-terminal-report",
+            "agentic-ide-spawn-terminals",
+        )
+    }
+    tools["search_web"] = _FakeSearchTool()
+    return BrainManager(
+        config=JarvisConfig(),
+        bus=EventBus(),
+        tools=tools,
+        tool_executor=_RecordingExecutor(),  # type: ignore[arg-type]
+    )
+
+
+def test_no_workspace_hides_pane_tools_keeps_status_and_resume(monkeypatch) -> None:
+    import jarvis.agentic_ide.session as ide_session
+
+    class _NoWorkspaceRegistry:
+        session = None
+
+    monkeypatch.setattr(ide_session, "get_registry", lambda: _NoWorkspaceRegistry())
+    manager = _manager_with_ide_tools()
+    gated = manager._hide_agentic_ide_tools_without_workspace(dict(manager._tools))
+    assert "agentic-ide-prompt" not in gated
+    assert "agentic-ide-terminal-report" not in gated
+    assert "agentic-ide-spawn-terminals" not in gated
+    assert "agentic-ide-status" in gated, "status must answer 'nothing open' honestly"
+    assert "agentic-ide-resume" in gated, "resume is what OPENS a workspace by voice"
+    assert "search_web" in gated
+
+
+def test_open_workspace_keeps_every_pane_tool(monkeypatch) -> None:
+    import jarvis.agentic_ide.session as ide_session
+
+    class _OpenWorkspaceRegistry:
+        session = object()
+
+    monkeypatch.setattr(ide_session, "get_registry", lambda: _OpenWorkspaceRegistry())
+    manager = _manager_with_ide_tools()
+    gated = manager._hide_agentic_ide_tools_without_workspace(dict(manager._tools))
+    assert set(gated) == set(manager._tools), "an open workspace hides nothing"
+
+
+def test_agentic_ide_gate_is_fault_tolerant() -> None:
+    manager = _manager_with_ide_tools()
+    sentinel = object()
+    assert (
+        manager._hide_agentic_ide_tools_without_workspace(sentinel)  # type: ignore[arg-type]
+        is sentinel
+    )
+
+
+# ---------------------------------------------------------------------------
+# GT-16: the honest refusal must consult the LIVE tool surface
+#
+# `_check_unsupported_intent` asks the capability registry, and the registry
+# lags reality: a plugin/CLI/MCP server connected mid-session is callable long
+# before it is registered. The refusal fired anyway — the maintainer's exact
+# complaint, "I ask for something and am told it is impossible while the
+# capability sits right there". Both tests below run the SAME utterance
+# against the SAME unresolving registry; only the attached tools differ.
+# ---------------------------------------------------------------------------
+
+
+class _FakeGmailTool:
+    name = "gmail"
+    schema: dict[str, Any] = {}
+
+
+def _unresolving_registry_module():
+    import types
+
+    mock_reg = types.SimpleNamespace(
+        all=lambda: (object(),),          # seeded, but nothing resolves
+        has_action_intent=lambda _t: True,
+        resolve_intent=lambda _t: None,
+        render_for_prompt=lambda lang="de": "",
+    )
+    module = types.ModuleType("jarvis.core.capabilities")
+    module.get_registry = lambda: mock_reg  # type: ignore[attr-defined]
+    return module
+
+
+def test_unsupported_refusal_fires_when_no_tool_covers_the_request() -> None:
+    """Nothing on the surface serves mail — the honest refusal is correct."""
+    import sys
+
+    original = sys.modules.get("jarvis.core.capabilities")
+    sys.modules["jarvis.core.capabilities"] = _unresolving_registry_module()
+    try:
+        manager, _executor = _manager_with_spawn()
+        result = manager._check_unsupported_intent(
+            "Schick bitte eine E-Mail an Beispielkontakt"
+        )
+        assert result is not None and "kann ich noch nicht" in result
+    finally:
+        if original is not None:
+            sys.modules["jarvis.core.capabilities"] = original
+        else:
+            sys.modules.pop("jarvis.core.capabilities", None)
+
+
+def test_unsupported_refusal_stands_down_for_a_freshly_connected_tool() -> None:
+    """Same utterance, same stale registry — but the Gmail plugin is attached.
+
+    The tool arrives the way it does live: `refresh_tools()` replaces
+    `self._tools` wholesale after the connect, so the surface read at decision
+    time is the only truthful one. The turn must proceed and let the model call
+    the tool instead of speaking "Das kann ich noch nicht".
+    """
+    import sys
+
+    original = sys.modules.get("jarvis.core.capabilities")
+    sys.modules["jarvis.core.capabilities"] = _unresolving_registry_module()
+    try:
+        manager, _executor = _manager_with_spawn()
+        utterance = "Schick bitte eine E-Mail an Beispielkontakt"
+        assert manager._check_unsupported_intent(utterance) is not None
+
+        # The Gmail plugin connects mid-session (what refresh_tools() does).
+        manager._tools = {"spawn_worker": _FakeTool(), "gmail": _FakeGmailTool()}
+
+        assert manager._check_unsupported_intent(utterance) is None, (
+            "a connected gmail tool must stand the refusal down"
+        )
+    finally:
+        if original is not None:
+            sys.modules["jarvis.core.capabilities"] = original
+        else:
+            sys.modules.pop("jarvis.core.capabilities", None)
+
+
+def test_live_tool_names_reads_both_surfaces_fresh() -> None:
+    """The evidence is read live and covers the local-action tools too."""
+    manager, _executor = _manager_with_local_actions()
+    names = manager._live_tool_names()
+    assert "spawn_worker" in names and "open_app" in names
+
+    manager._tools = {"gmail": _FakeGmailTool()}
+    assert "gmail" in manager._live_tool_names()
+    assert "spawn_worker" not in manager._live_tool_names(), (
+        "_live_tool_names must never serve a cached snapshot"
+    )
+
+
+def test_internal_message_tool_is_router_only():
+    from jarvis.brain.factory import ROUTER_TOOLS
+    from jarvis.society.capabilities import NEVER_GRANTED
+
+    assert "message-agent" in ROUTER_TOOLS
+    assert "message_agent" in NEVER_GRANTED
