@@ -926,7 +926,9 @@ def parse_models_response(provider: str, payload: dict) -> list[ModelInfo]:
                 id=raw,
                 label=label,
                 output_modalities=_output_modalities(m),
-                input_modalities=_input_modalities(m),
+                input_modalities=(
+                    _input_modalities(m) or _known_input_modalities(provider, raw)
+                ),
                 supported_parameters=_supported_parameters(m),
                 pricing=_pricing(m),
                 created=_created(m),
@@ -994,6 +996,29 @@ def _input_modalities(entry: dict) -> tuple[str, ...] | None:
     return tuple(str(x) for x in mods)
 
 
+
+# NVIDIA NIMs /v1/models roster is OpenAI-compatible but does not reliably
+# publish per-model architecture metadata. Keep the small set of capabilities
+# NVIDIA documents explicitly so screenshot routing never treats a text-only
+# Nemotron as visual. Unknown/new models remain fail-open.
+_KNOWN_INPUT_MODALITIES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("nvidia", "nvidia/nemotron-3-super-120b-a12b"): ("text",),
+    ("nvidia", "nvidia/nemotron-3-ultra-550b-a55b"): ("text",),
+    ("nvidia", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"): (
+        "text",
+        "image",
+        "video",
+        "audio",
+    ),
+}
+
+
+def _known_input_modalities(provider: str, model_id: str) -> tuple[str, ...] | None:
+    """Documented modality fallback when a provider catalog omits the field."""
+    return _KNOWN_INPUT_MODALITIES.get(
+        ((provider or "").strip().lower(), (model_id or "").strip().lower())
+    )
+
 def _supported_parameters(entry: dict) -> tuple[str, ...] | None:
     """OpenRouter's top-level ``supported_parameters`` (includes ``"tools"`` when
     the model can tool-call) or None when the endpoint doesn't expose it."""
@@ -1004,59 +1029,61 @@ def _supported_parameters(entry: dict) -> tuple[str, ...] | None:
 
 
 def model_capabilities(provider: str, model_id: str) -> dict[str, bool | None]:
-    """Per-model ``{vision, tools}`` hints, read SYNCHRONOUSLY from the cached
-    ``/v1/models`` data (``data/model_catalog_cache.json``).
+    """Per-model capability hints from cache plus documented provider fallbacks.
 
-    ``None`` for a field means "unknown" — the caller defaults to capable, so there
-    is NO regression for providers/models that don't expose the data. Used by the
-    OpenRouter brain (H4/H5): a text-only or non-tool model the user picked degrades
-    honestly (delegate / skip Computer-Use) instead of 400-ing the provider.
+    None means unknown. Unknown models keep the existing fail-open behavior;
+    an explicitly text-only model cannot be sent screenshots just because a
+    sibling on the same provider is multimodal.
     """
     from jarvis.core import config as _cfg
 
     cache_path = _cfg.DATA_DIR / "model_catalog_cache.json"
     mid = (model_id or "").strip()
+    known_input = _known_input_modalities(provider, mid)
     try:
         data = json.loads(cache_path.read_text(encoding="utf-8"))
         for m in data.get(provider, {}).get("models", []):
             if m.get("id") == mid:
                 inp = m.get("input_modalities")
                 params = m.get("supported_parameters")
+                vision = (
+                    ("image" in inp)
+                    if isinstance(inp, list)
+                    else ("image" in known_input if known_input is not None else None)
+                )
                 return {
-                    "vision": ("image" in inp) if isinstance(inp, list) else None,
+                    "vision": vision,
                     "tools": ("tools" in params) if isinstance(params, list) else None,
                 }
-    except Exception:  # noqa: BLE001, S110 — missing/corrupt cache means unknown
+    except Exception:  # noqa: BLE001, S110 - missing/corrupt cache means fallback/unknown
         pass
-    return {"vision": None, "tools": None}
+    return {
+        "vision": ("image" in known_input) if known_input is not None else None,
+        "tools": None,
+    }
 
 
 def pick_vision_model(provider: str) -> str | None:
-    """The best vision-capable brain model of ``provider``, from the cached
-    ``/v1/models`` catalog — or ``None`` when the catalog carries no modality
-    data for this provider (direct provider endpoints) or no candidate exists.
-
-    Computer-Use is screenshot-grounded: a provider whose CONFIGURED model
-    cannot see images must not drop out of the CU chain when the same key
-    unlocks vision-capable siblings (AP-22 — the key is fine, only the model
-    choice is blind). Candidates run through the SAME brain filter + relevance
-    sort as the picker, so the rescue pick equals the top row the user would
-    see in the vision-filtered dropdown.
-    """
+    """Best vision-capable brain model from live rows plus documented hints."""
     from jarvis.core import config as _cfg  # noqa: PLC0415
 
     cache_path = _cfg.DATA_DIR / "model_catalog_cache.json"
     try:
         data = json.loads(cache_path.read_text(encoding="utf-8"))
         entries = data.get(provider, {}).get("models", [])
-    except Exception:  # noqa: BLE001 — missing/corrupt cache → no rescue
-        return None
+    except Exception:  # noqa: BLE001 - static hints may still provide a candidate
+        entries = []
     candidates: list[ModelInfo] = []
+    seen: set[str] = set()
     for m in entries:
         mid = str(m.get("id") or "").strip()
         inp = m.get("input_modalities")
+        if not isinstance(inp, list):
+            known = _known_input_modalities(provider, mid)
+            inp = list(known) if known is not None else None
         if not mid or not (isinstance(inp, list) and "image" in inp):
             continue
+        seen.add(mid.lower())
         out_mods = m.get("output_modalities")
         params = m.get("supported_parameters")
         candidates.append(
@@ -1068,6 +1095,11 @@ def pick_vision_model(provider: str) -> str | None:
                 supported_parameters=tuple(params) if isinstance(params, list) else None,
             )
         )
+    provider_key = (provider or "").strip().lower()
+    for (known_provider, mid), inp in _KNOWN_INPUT_MODALITIES.items():
+        if known_provider != provider_key or mid in seen or "image" not in inp:
+            continue
+        candidates.append(ModelInfo(id=mid, label=mid, input_modalities=inp))
     usable = sort_models(provider, filter_brain_models(candidates))
     return usable[0].id if usable else None
 
@@ -1088,12 +1120,12 @@ _FAST_CLASS_MARKERS: tuple[str, ...] = (
 
 
 def provider_has_modality_data(provider: str) -> bool:
-    """True when the cached catalog carries ``input_modalities`` for at least
-    one of ``provider``'s models — i.e. a "no vision model found" verdict is
-    an informed NO, not missing data. Direct provider endpoints (gemini /
-    claude-api / openai) expose no modality metadata and return False."""
+    """True when cache or documented hints make the modality verdict informed."""
     from jarvis.core import config as _cfg  # noqa: PLC0415
 
+    provider_key = (provider or "").strip().lower()
+    if any(p == provider_key for p, _ in _KNOWN_INPUT_MODALITIES):
+        return True
     cache_path = _cfg.DATA_DIR / "model_catalog_cache.json"
     try:
         data = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -1119,28 +1151,26 @@ def is_fast_class_model(model_id: str | None) -> bool:
 
 
 def pick_fast_vision_model(provider: str) -> str | None:
-    """The best FAST vision-capable model of ``provider`` (or ``None``).
-
-    Same candidate set as :func:`pick_vision_model` (vision input + the brain
-    filter), but the fast class leads: a "flash"/"haiku"/"mini"-style sibling
-    of a known family beats the flagship. Within each band the picker's
-    relevance sort decides. Falls back to the plain vision pick when the
-    provider has no fast vision sibling.
-    """
+    """Best low-latency vision model from live rows plus documented hints."""
     from jarvis.core import config as _cfg  # noqa: PLC0415
 
     cache_path = _cfg.DATA_DIR / "model_catalog_cache.json"
     try:
         data = json.loads(cache_path.read_text(encoding="utf-8"))
         entries = data.get(provider, {}).get("models", [])
-    except Exception:  # noqa: BLE001 — missing/corrupt cache → no pick
-        return None
+    except Exception:  # noqa: BLE001 - static hints may still provide a candidate
+        entries = []
     candidates: list[ModelInfo] = []
+    seen: set[str] = set()
     for m in entries:
         mid = str(m.get("id") or "").strip()
         inp = m.get("input_modalities")
+        if not isinstance(inp, list):
+            known = _known_input_modalities(provider, mid)
+            inp = list(known) if known is not None else None
         if not mid or not (isinstance(inp, list) and "image" in inp):
             continue
+        seen.add(mid.lower())
         out_mods = m.get("output_modalities")
         params = m.get("supported_parameters")
         candidates.append(
@@ -1152,11 +1182,14 @@ def pick_fast_vision_model(provider: str) -> str | None:
                 supported_parameters=tuple(params) if isinstance(params, list) else None,
             )
         )
+    provider_key = (provider or "").strip().lower()
+    for (known_provider, mid), inp in _KNOWN_INPUT_MODALITIES.items():
+        if known_provider != provider_key or mid in seen or "image" not in inp:
+            continue
+        candidates.append(ModelInfo(id=mid, label=mid, input_modalities=inp))
     usable = sort_models(provider, filter_brain_models(candidates))
     if not usable:
         return None
-    # Fast class first — but only KNOWN families (family rank > 0), so an
-    # obscure "-mini" of an unknown vendor never beats a Gemini Flash / Haiku.
     for m in usable:
         if _family_rank(m.id) > 0 and is_fast_class_model(m.id):
             return m.id

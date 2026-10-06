@@ -67,6 +67,18 @@ def _direct_open_explorer_plan(_text: str, **_kwargs: object) -> LocalActionPlan
     )
 
 
+def _direct_browser_url_plan(_text: str, **_kwargs: object) -> LocalActionPlan:
+    return LocalActionPlan(
+        mode=LocalActionMode.DIRECT,
+        tool_calls=(
+            LocalToolCall(
+                name="open_app",
+                args={"app_name": "brave", "arguments": "https://google.com"},
+            ),
+        ),
+    )
+
+
 async def test_scoped_browser_chat_never_uses_the_global_desktop_shortcut(monkeypatch):
     from jarvis.brain.manager import _TURN_OVERRIDE
     from jarvis.brain.turn_override import TurnOverride
@@ -79,6 +91,24 @@ async def test_scoped_browser_chat_never_uses_the_global_desktop_shortcut(monkey
         assert manager._tool_executor.called_with is None
     finally:
         _TURN_OVERRIDE.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_classic_aerion_url_navigation_stands_down_for_isolated_browser(
+    monkeypatch,
+) -> None:
+    manager = _make_direct_manager(reply_language="en")
+    manager._tools = {"society_browser": object()}
+    monkeypatch.setattr(
+        "jarvis.brain.manager.match_local_action", _direct_browser_url_plan
+    )
+
+    result = await manager._run_local_action_fast_path(
+        "Open Brave and go to https://google.com"
+    )
+
+    assert result is None
+    assert manager._tool_executor.called_with is None
 
 
 @pytest.mark.asyncio

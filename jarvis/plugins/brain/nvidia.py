@@ -59,6 +59,14 @@ class NvidiaBrain:
 
     def __init__(self, model: str | None = None) -> None:
         self._model = model or DEFAULT_MODEL
+        # NIM is a multi-model gateway: provider-level vision=True is too broad.
+        # NVIDIA documents Super/Ultra as text-only and Omni as multimodal; the
+        # shared catalog also learns live modality metadata when a feed exposes
+        # it. Unknown/new models remain fail-open for backwards compatibility.
+        from jarvis.brain.model_catalog import model_capabilities
+
+        capabilities = model_capabilities("nvidia", self._model)
+        self.supports_vision = capabilities.get("vision") is not False
         self._client: Any = None
 
     def can_call_tools(self) -> bool:
@@ -86,7 +94,12 @@ class NvidiaBrain:
             # First use imports the SDK — seconds on a cold disk, and never on
             # the event loop (BUG-189; see claude_api.py for the measurement).
             client = await asyncio.to_thread(self._ensure_client)
-        async for delta in stream_complete(client, self._model, req):
+        async for delta in stream_complete(
+            client,
+            self._model,
+            req,
+            supports_vision=self.supports_vision,
+        ):
             yield delta
 
     def estimate_cost(self, req: BrainRequest) -> float:

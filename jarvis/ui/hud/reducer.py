@@ -753,7 +753,18 @@ class HudReducer:
         closed = self._ops.close(f"harness:{_trace(event)}:{harness}", ts)
         if closed is None:
             return False
-        self._remember_output(closed, ts, status="completed")
+        result = event.result
+        exit_code = int(getattr(result, "exit_code", 0) or 0) if result is not None else 0
+        if exit_code == 130:
+            status = "cancelled"
+        elif exit_code == 0:
+            status = "completed"
+        else:
+            status = "failed"
+        detail = ""
+        if result is not None:
+            detail = getattr(result, "stderr", "") or getattr(result, "stdout", "")
+        self._remember_output(closed, ts, status=status, detail=detail)
         return True
 
     # -------------------------------------------------------------- tasks

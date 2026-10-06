@@ -2034,6 +2034,12 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             "delegate-to-agent",
             "society-status",
             "message-agent",
+            # AERION isolated browser (2026-10-06): direct website/web-app
+            # control through the lead agent's own browser profile. This is
+            # deliberately router-visible because the classic HUD/chat path
+            # does not pass through the agent-chat SurfaceKit that already
+            # exposes society_browser. It never operates the user's desktop.
+            "society-browser",
             # Every app action (2026-09-29): catalog search + one gated REST
             # operation under the person's policy - never a spawn, never in a
             # worker set. See ADR-0011 amendment "Every app action".
@@ -2053,13 +2059,16 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
 
 
 def test_society_voice_tools_in_router_tools() -> None:
-    """``delegate-to-agent`` and ``society-status`` must live in ROUTER_TOOLS
-    (2026-09-02): the router reaches the agent society only through these
-    two names. Neither spawns - the society scheduler owns dispatch."""
+    """The router reaches society control/status plus the isolated lead browser.
+
+    The browser is the classic AERION/HUD bridge to the same lead BrowserTool
+    that agent-chat exposes through its SurfaceKit; it is not desktop control.
+    """
     from jarvis.brain.factory import ROUTER_TOOLS
 
     assert "delegate-to-agent" in ROUTER_TOOLS
     assert "society-status" in ROUTER_TOOLS
+    assert "society-browser" in ROUTER_TOOLS
 
 
 def test_search_web_in_router_tools() -> None:

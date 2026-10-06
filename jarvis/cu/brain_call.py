@@ -199,7 +199,9 @@ def _speed_tune_chain(
                         alt = candidate
                 except Exception:  # noqa: BLE001
                     alt = None
-            if alt and alt != model and (blind or model):
+            if alt and alt != model and (
+                blind or model or provider_has_modality_data(provider)
+            ):
                 # DEBUG, not INFO: this fires for EVERY unpinned chain
                 # CANDIDATE on every step — including providers that never
                 # serve a single call. Logged at INFO it reads as "this model

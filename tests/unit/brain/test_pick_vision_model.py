@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 
 import jarvis.core.config as cfg
-from jarvis.brain.model_catalog import pick_vision_model
+from jarvis.brain.model_catalog import model_capabilities
 from jarvis.brain.model_catalog import pick_fast_vision_model
+from jarvis.brain.model_catalog import pick_vision_model
+from jarvis.brain.model_catalog import provider_has_modality_data
 from jarvis.cu.brain_call import _speed_tune_chain
 
 
@@ -67,6 +69,42 @@ def test_no_modality_data_returns_none(monkeypatch, tmp_path):
 def test_missing_cache_returns_none(monkeypatch, tmp_path):
     monkeypatch.setattr(cfg, "DATA_DIR", tmp_path)
     assert pick_vision_model("openrouter") is None
+
+
+def test_nvidia_documented_modalities_work_without_live_catalog(
+    monkeypatch, tmp_path,
+) -> None:
+    monkeypatch.setattr(cfg, "DATA_DIR", tmp_path)
+    super_id = "nvidia/nemotron-3-super-120b-a12b"
+    ultra_id = "nvidia/nemotron-3-ultra-550b-a55b"
+    omni_id = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+
+    assert model_capabilities("nvidia", super_id)["vision"] is False
+    assert model_capabilities("nvidia", ultra_id)["vision"] is False
+    assert model_capabilities("nvidia", omni_id)["vision"] is True
+    assert provider_has_modality_data("nvidia") is True
+    assert pick_vision_model("nvidia") == omni_id
+    assert pick_fast_vision_model("nvidia") == omni_id
+
+
+def test_nvidia_text_only_router_model_swaps_to_omni_without_cache(
+    monkeypatch, tmp_path,
+) -> None:
+    monkeypatch.setattr(cfg, "DATA_DIR", tmp_path)
+    super_id = "nvidia/nemotron-3-super-120b-a12b"
+    omni_id = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+
+    assert _speed_tune_chain([("nvidia", super_id)]) == [("nvidia", omni_id)]
+
+
+def test_nvidia_provider_default_swaps_to_omni_without_cache(
+    monkeypatch, tmp_path,
+) -> None:
+    """Matches the live CU trace where NVIDIA entered the chain as nvidia(None)."""
+    monkeypatch.setattr(cfg, "DATA_DIR", tmp_path)
+    omni_id = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+
+    assert _speed_tune_chain([("nvidia", None)]) == [("nvidia", omni_id)]
 
 
 # ---------------------------------------------------------------------------

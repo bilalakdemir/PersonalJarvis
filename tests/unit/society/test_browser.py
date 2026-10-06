@@ -9,6 +9,8 @@ from uuid import uuid4
 
 import pytest
 
+from jarvis.core import config as cfg
+from jarvis.plugins.tool.society_browser import LeadSocietyBrowserTool
 from jarvis.society.browser.llm import LLMUnavailable, llm_spec_for
 from jarvis.society.browser.session import (
     BrowserJobs,
@@ -72,6 +74,10 @@ def test_llm_mapping_with_explicit_keys():
     assert spec.cls == "ChatAnthropic" and spec.model == "claude-x" and spec.api_key == "sk-ant"
     grok = llm_spec_for("grok", secret=lambda p: "xai")
     assert grok.cls == "ChatOpenAI" and grok.base_url and "x.ai" in grok.base_url
+    nvidia = llm_spec_for("nvidia", secret=lambda p: "nvapi-test")
+    assert nvidia.cls == "ChatOpenAI"
+    assert nvidia.model == "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+    assert nvidia.base_url == "https://integrate.api.nvidia.com/v1"
     ollama = llm_spec_for("ollama", "qwen3:8b", secret=lambda p: None)
     assert ollama.cls == "ChatOllama" and ollama.api_key is None
     assert "api_key" not in ollama.to_request()
@@ -81,6 +87,25 @@ def test_llm_mapping_with_explicit_keys():
     with pytest.raises(LLMUnavailable) as unknown:
         llm_spec_for("deepseek-harness", secret=lambda p: "k")
     assert unknown.value.reason is FailureReason.BLOCKED_BY_POLICY
+
+
+def test_router_browser_moves_blind_nvidia_main_to_omni(monkeypatch, tmp_path):
+    class Manager:
+        active_provider = "nvidia"
+
+        @staticmethod
+        def _fast_model(_provider):
+            return "nvidia/nemotron-3-super-120b-a12b"
+
+    from jarvis.core import runtime_refs
+
+    monkeypatch.setattr(cfg, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(runtime_refs, "get_brain_manager", lambda: Manager())
+
+    assert LeadSocietyBrowserTool._model_pick() == (
+        "nvidia",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    )
 
 
 def test_task_needs_approval_words():

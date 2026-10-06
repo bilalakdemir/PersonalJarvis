@@ -9204,6 +9204,27 @@ class BrainManager:
         if plan is None:
             return None
 
+        # AERION/classic chat owns an isolated lead browser now. Keep the fast
+        # local launcher for bare desktop app opens, but do NOT consume a URL
+        # navigation/search by launching the user's desktop browser: let the
+        # router call society_browser so the work stays in Jarvis' own profile.
+        if (
+            plan.mode == LocalActionMode.DIRECT
+            and "society_browser" in getattr(self, "_tools", {})
+        ):
+            for call in plan.tool_calls:
+                if call.name != "open_app":
+                    continue
+                app_name = str(call.args.get("app_name") or "")
+                arguments = str(call.args.get("arguments") or "")
+                if app_name.startswith(("http://", "https://")) or arguments.startswith(
+                    ("http://", "https://")
+                ):
+                    log.debug(
+                        "local browser URL fast-path stood down for isolated society_browser"
+                    )
+                    return None
+
         tid = trace_id or uuid4()
         if plan.mode == LocalActionMode.UNSUPPORTED:
             # The gate recognised an action request but no registered capability

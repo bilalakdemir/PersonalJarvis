@@ -10,6 +10,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from importlib.metadata import entry_points
+from uuid import uuid4
 
 from jarvis.core.bus import EventBus
 from jarvis.core.events import HarnessCompleted, HarnessDispatched, HarnessProgress
@@ -90,33 +91,107 @@ class HarnessManager:
     async def dispatch(
         self, name: str, task: HarnessTask
     ) -> AsyncIterator[HarnessResult]:
-        """Start a harness and yield Progress and Final results."""
-        harness = self.get(name)
-        if self._bus is not None:
-            await self._bus.publish(HarnessDispatched(harness=name, task=task))
+        """Start a harness and yield progress plus one correlated terminal event.
 
-        last: HarnessResult | None = None
+        Every lifecycle event of ONE dispatch carries the same trace id. The HUD
+        keys running harness work by trace_id + harness; letting each event
+        create its own default UUID meant a completion could never close the row
+        opened by HarnessDispatched.
+
+        HarnessCompleted is emitted from the outer finally even when a caller
+        abandons the stream or the harness raises. This is a projection contract,
+        not a claim that an interrupted harness succeeded: interrupted streams
+        use exit code 130 and crashes use exit code 1.
+        """
+        harness = self.get(name)
+        event_trace = uuid4()
+        if self._bus is not None:
+            await self._bus.publish(
+                HarnessDispatched(trace_id=event_trace, harness=name, task=task)
+            )
+
+        terminal: HarnessResult | None = None
         stream = harness.invoke(task)
         try:
-            async for result in stream:
-                last = result
-                if self._bus is not None and not result.is_final:
-                    await self._bus.publish(
-                        HarnessProgress(harness=name, result=result)
-                    )
-                yield result
+            try:
+                async for result in stream:
+                    if result.is_final:
+                        terminal = result
+                    elif self._bus is not None:
+                        await self._bus.publish(
+                            HarnessProgress(
+                                trace_id=event_trace,
+                                harness=name,
+                                result=result,
+                            )
+                        )
+                    yield result
+            except asyncio.CancelledError:
+                terminal = terminal or HarnessResult(
+                    stderr="harness dispatch cancelled",
+                    exit_code=130,
+                    is_final=True,
+                )
+                raise
+            except GeneratorExit:
+                terminal = terminal or HarnessResult(
+                    stderr="harness dispatch closed before completion",
+                    exit_code=130,
+                    is_final=True,
+                )
+                raise
+            except Exception as exc:
+                terminal = terminal or HarnessResult(
+                    stderr=f"{type(exc).__name__}: {exc}",
+                    exit_code=1,
+                    is_final=True,
+                )
+                raise
         finally:
-            # A consumer that abandons this dispatch mid-stream (break, outer
-            # cancellation, GC of the dispatch generator) must still unwind
-            # the harness's own finally deterministically — the CU harness
-            # releases the desktop lock, its cancel-token registration, and
-            # the screen indicator (CUControlEnded) there. Without this,
-            # cleanup would wait on the async-generator GC finalizer with no
-            # timing guarantee.
-            await stream.aclose()
-
-        if self._bus is not None and last is not None and last.is_final:
-            await self._bus.publish(HarnessCompleted(harness=name, result=last))
+            try:
+                # A consumer that abandons this dispatch mid-stream (break,
+                # outer cancellation, explicit aclose) must still unwind the
+                # harness own finally deterministically.
+                await stream.aclose()
+            except asyncio.CancelledError:
+                terminal = terminal or HarnessResult(
+                    stderr="harness cleanup cancelled",
+                    exit_code=130,
+                    is_final=True,
+                )
+                raise
+            except GeneratorExit:
+                terminal = terminal or HarnessResult(
+                    stderr="harness cleanup closed before completion",
+                    exit_code=130,
+                    is_final=True,
+                )
+                raise
+            except Exception as exc:
+                terminal = terminal or HarnessResult(
+                    stderr=f"{type(exc).__name__}: {exc}",
+                    exit_code=1,
+                    is_final=True,
+                )
+                raise
+            finally:
+                if terminal is None:
+                    # A harness is required to yield a final result. Ending
+                    # without one is a failed lifecycle, never a forever-running
+                    # HUD row and never an invented success.
+                    terminal = HarnessResult(
+                        stderr="harness ended without a final result",
+                        exit_code=1,
+                        is_final=True,
+                    )
+                if self._bus is not None:
+                    await self._bus.publish(
+                        HarnessCompleted(
+                            trace_id=event_trace,
+                            harness=name,
+                            result=terminal,
+                        )
+                    )
 
     async def dispatch_parallel(
         self,

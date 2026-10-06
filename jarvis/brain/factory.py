@@ -116,6 +116,9 @@ ROUTER_TOOLS = frozenset({
     "delegate-to-agent",
     "society-status",
     "message-agent",
+    # The AERION/front-page classic chat does not pass through the agent-chat
+    # SurfaceKit, so expose the SAME isolated lead browser lazily here too.
+    "society-browser",
     # Skills-Brain-Integration: Brain-callable executor for installed user
     # skills. D9-recursion-protection is structural — SkillRunner is constructed
     # without a tool_registry that would re-expose run-skill recursively.
@@ -481,7 +484,12 @@ def _load_tools_for_tier(
                     kontrollierer_resolver=_resolve_kontrollierer,
                     announcer=build_spawn_announcer(config),
                 )
-            elif ep.name in ("delegate-to-agent", "society-status", "message-agent"):
+            elif ep.name in (
+                "delegate-to-agent",
+                "society-status",
+                "message-agent",
+                "society-browser",
+            ):
                 # Agent society (2026-09-02): same lazy-resolver pattern as
                 # spawn-worker - the society runtime is built by the server
                 # on first use, after the brain exists.
@@ -614,6 +622,22 @@ def _load_tools_for_tier(
                 register_tool(inst, source=ep.name, virtual=False)
         except Exception as exc:  # noqa: BLE001
             log.debug("Tool %s not loadable: %s", ep.name, exc)
+
+    # Editable installs cache entry-point metadata in dist-info. A checkout that
+    # gains the new society-browser entry point can therefore run the updated
+    # source before pip has refreshed that metadata. Keep AERION functional in
+    # that exact upgrade window by attaching the same lazy wrapper directly.
+    if tier == "router" and "society_browser" not in tools:
+        try:
+            from jarvis.plugins.tool.society_browser import LeadSocietyBrowserTool
+
+            register_tool(
+                LeadSocietyBrowserTool(runtime_resolver=_resolve_society_runtime),
+                source="builtin:society-browser-fallback",
+                virtual=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Built-in society browser fallback not loadable: %s", exc)
 
     # Phase 7.3 — self-mod tools are not discoverable via entry_points
     # (they require a shared state writer + PendingMutationStore). Plan-§AD-2:
