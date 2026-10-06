@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
+import jarvis.self_engineering as self_engineering
 from jarvis.self_engineering import _port, _save, _state, failed, redact, risk, verdict
 
 
@@ -50,3 +52,51 @@ def test_state_round_trip_is_atomic_shape(tmp_path: Path) -> None:
     _save(path, value)
     assert _state(path) == value
     assert json.loads(path.read_text(encoding="utf-8")) == value
+
+
+def test_missing_pytest_defers_local_tests_to_ci(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    def fake_run(cmd, cwd, *, stdin=None, timeout=300, env=None):
+        if cmd[1:3] == ["-m", "pytest"]:
+            return subprocess.CompletedProcess(
+                cmd, 1, "", f"{cmd[0]}: No module named pytest\n"
+            )
+        if "scripts/ci/run_gates.py" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "gates pass\n", "")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(self_engineering, "_run", fake_run)
+
+    ok, selected, output, local_validation = self_engineering._tests(
+        tmp_path, ["jarvis/plugins/tool/run_shell.py"]
+    )
+
+    assert ok is True
+    assert selected
+    assert local_validation == "unavailable"
+    assert "LOCAL_TESTS_UNAVAILABLE" in output
+
+
+def test_push_branch_uses_primary_repo(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+
+    def fake_git(repo: Path, *args: str):
+        calls.append((repo, args))
+        return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+    monkeypatch.setattr(self_engineering, "_git", fake_git)
+
+    result = self_engineering._push_branch(tmp_path, "agent/aerion-test")
+
+    assert result.returncode == 0
+    assert calls == [
+        (
+            tmp_path,
+            (
+                "push",
+                "origin",
+                "refs/heads/agent/aerion-test:refs/heads/agent/aerion-test",
+            ),
+        )
+    ]
