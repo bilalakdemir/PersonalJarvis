@@ -322,3 +322,101 @@ def test_terminal_request_context_reaches_incident_without_poll_cache() -> None:
     assert "https://example.com" in context
     assert "desktop path was selected" in context
     assert "exit 3" in context
+
+
+
+def test_verifier_rejected_patch_gets_one_bounded_rework(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    changed = [
+        "jarvis/plugins/tool/open_app.py",
+        "tests/unit/plugins/tool/test_open_app.py",
+    ]
+    fingerprints = iter(["before", "after"])
+
+    def completed(text: str, code: int = 0) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(["codex"], code, text, "")
+
+    def fake_codex(worktree: Path, prompt: str, sandbox: str):
+        calls.append((sandbox, prompt))
+        if len(calls) == 1:
+            return completed("OUTCOME: FIXED")
+        if len(calls) == 2:
+            return completed(
+                "VERDICT: FAIL\nRISK: LOW\n"
+                "REASON: alias fix breaks Start Menu-only installs"
+            )
+        if len(calls) == 3:
+            return completed("OUTCOME: FIXED")
+        return completed(
+            "VERDICT: PASS\nRISK: LOW\nREASON: regression fixed and covered"
+        )
+
+    monkeypatch.setattr(self_engineering, "_codex", fake_codex)
+    monkeypatch.setattr(self_engineering, "_changed", lambda worktree: list(changed))
+    monkeypatch.setattr(
+        self_engineering,
+        "_change_fingerprint",
+        lambda worktree, paths: next(fingerprints),
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "_tests",
+        lambda worktree, paths: (True, tuple(paths), "ok", "passed"),
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "_git",
+        lambda repo, *args: subprocess.CompletedProcess(["git", *args], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "_push_branch",
+        lambda repo, branch: subprocess.CompletedProcess(["git", "push"], 0, "", ""),
+    )
+    monkeypatch.setattr(self_engineering.shutil, "which", lambda name: None)
+    monkeypatch.setattr(self_engineering.time, "time", lambda: 4321)
+
+    result = self_engineering._incident(
+        tmp_path / "repo",
+        tmp_path / "data",
+        [
+            {
+                "activity_id": "tool:open",
+                "kind": "tool",
+                "label": "open_app",
+                "status": "failed",
+                "request_detail": "{'app_name': 'Brave Browser'}",
+                "detail": "not found",
+                "updated_at_ns": 100,
+            }
+        ],
+        False,
+    )
+
+    assert result["status"] == "branch_pushed"
+    assert [sandbox for sandbox, _ in calls] == [
+        "workspace-write",
+        "read-only",
+        "workspace-write",
+        "read-only",
+    ]
+    assert "rejected the current patch" in calls[2][1]
+    assert "Start Menu-only installs" in calls[2][1]
+
+
+def test_change_fingerprint_detects_same_path_revision(tmp_path: Path) -> None:
+    path = tmp_path / "jarvis" / "plugins" / "tool" / "open_app.py"
+    path.parent.mkdir(parents=True)
+    path.write_text("before", encoding="utf-8")
+    before = self_engineering._change_fingerprint(
+        tmp_path, ["jarvis/plugins/tool/open_app.py"]
+    )
+
+    path.write_text("after", encoding="utf-8")
+    after = self_engineering._change_fingerprint(
+        tmp_path, ["jarvis/plugins/tool/open_app.py"]
+    )
+
+    assert before != after
