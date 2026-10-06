@@ -99,7 +99,11 @@ class LeadSocietyBrowserTool:
             prepare = getattr(runtime, "prepare_context", None)
             if callable(prepare):
                 if not await prepare():
-                    return ToolResult(success=False, output=None, error="browser runtime unavailable")
+                    return ToolResult(
+                        success=False,
+                        output=None,
+                        error="browser runtime unavailable",
+                    )
             else:
                 await runtime.ensure_started()
 
