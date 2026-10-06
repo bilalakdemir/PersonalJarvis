@@ -9208,7 +9208,10 @@ class BrainManager:
         # local launcher for bare desktop app opens, but do NOT consume a URL
         # navigation/search by launching the user's desktop browser: let the
         # router call society_browser so the work stays in Jarvis' own profile.
-        if plan.mode == LocalActionMode.DIRECT and "society_browser" in getattr(self, "_tools", {}):
+        if (
+            plan.mode == LocalActionMode.DIRECT
+            and "society_browser" in getattr(self, "_tools", {})
+        ):
             for call in plan.tool_calls:
                 if call.name != "open_app":
                     continue
@@ -11998,3 +12001,2493 @@ class BrainManager:
         _drop_in_hist = sum(
             1 for m in history
             if isinstance(getattr(m, "content", None), str)
+            and "\U0001F4CE" in m.content
+        )
+        if _drop_in_hist:
+            log.info(
+                "📎 DROP CONTEXT present in this turn's history: %d note(s), "
+                "use_history=%s, total history=%d",
+                _drop_in_hist, use_history, len(history),
+            )
+        last_exc: Exception | None = None
+        response_text = ""
+        used_provider: str | None = None
+        used_model: str | None = None
+        _turn_executed: set[str] = set()  # tools that REALLY ran this turn
+        # AI Pointer (deictic push): launch the cursor-element resolution BEFORE
+        # the vision-image await so it overlaps with it instead of running serially
+        # after (AP-9: keep the deictic turn off the serial hot path). The task does
+        # the regex gate itself, so non-deictic turns complete instantly with
+        # ("", None) and fast-skip on a headless host. Awaited just below.
+        pointer_task = (
+            None
+            if screen_context.has_image
+            else self._start_pointer_task(user_text, is_smalltalk_turn)
+        )
+        if screen_context.has_image:
+            pending_images = getattr(self, "_pending_turn_images", None)
+            injected = pending_images.pop(trace_uuid, ()) if pending_images else ()
+            images = tuple(injected) + (
+                ImageBlock(
+                    mime=screen_context.mime,
+                    data_b64=base64.b64encode(screen_context.image).decode("ascii"),
+                    source_hash=screen_context.source_hash,
+                ),
+            )
+        else:
+            images = await self._collect_vision_images(
+                trace_id=trace_uuid,
+                user_text=user_text,
+                is_smalltalk=is_smalltalk_turn,
+            )
+        # Per-provider error aggregation for a meaningful user message when
+        # the whole chain fails. Pattern: (provider, model, kind, detail).
+        # kind ∈ {"rate_limit", "missing_key", "skipped_cooldown", "init_fail",
+        #         "call_fail"}
+        provider_errors: list[tuple[str, str, str, str]] = []
+
+        # B5 Agent C: wiki context injection — run once before the provider
+        # loop so all providers in the fallback chain see the same enriched
+        # system prompt.  The injector is a no-op when _wiki_injector is None
+        # (Agent B not merged, or [wiki_context].enabled = false).
+        # _wiki_context_suffix is reset in the finally block at the end of
+        # generate() to prevent stale context leaking into the next turn.
+        try:
+            if self._wiki_injector is not None and not (
+                turn_override is not None
+                and turn_override.tool_context.get("tool_origin") == "society"
+            ):
+                base_prompt = self._build_system_prompt()
+                injected_prompt = await self._wiki_injector.maybe_inject(
+                    user_text=user_text,
+                    system_prompt=base_prompt,
+                )
+                # Store the delta (only the appended wiki block, not the whole
+                # prompt) so _build_system_prompt() can append it once without
+                # duplicating the rest of the prompt.
+                if injected_prompt != base_prompt:
+                    # Extract only the appended wiki section
+                    self._wiki_context_suffix = injected_prompt[len(base_prompt):]
+                else:
+                    self._wiki_context_suffix = ""
+        except Exception:  # noqa: BLE001
+            # Any unexpected error in the injector must never crash a voice turn.
+            log.warning("WikiContextInjector raised unexpectedly — skipping", exc_info=True)
+            self._wiki_context_suffix = ""
+
+        # Wave 2 (omni-latency): assemble the per-turn dynamic context (date +
+        # wiki) once. In cache-optimized mode it rides on the user
+        # message (keeping the cached system prompt stable); empty in legacy
+        # mode. Reused for every provider in the fallback chain below.
+        turn_context = self._build_turn_context()
+        if project_context:
+            turn_context = (
+                f"{turn_context}\n\n{project_context}"
+                if turn_context
+                else project_context
+            )
+        if screen_context.note:
+            turn_context = (
+                f"{turn_context}\n\n{screen_context.note}"
+                if turn_context
+                else screen_context.note
+            )
+
+        # AD-S3/S4: on a skill-matched turn the rendered instructions ride on
+        # the per-turn context (guaranteed invocation, no run-skill round
+        # trip needed) — deterministic code, not a prompt-only hope. The
+        # cached system prefix stays byte-stable.
+        _skill_block = self._render_skill_turn_injection(user_text)
+        if _skill_block:
+            turn_context = (
+                f"{turn_context}\n\n{_skill_block}" if turn_context else _skill_block
+            )
+        else:
+            # No capture, but the deterministic scorer may still have found
+            # plausible candidates. Narrowing 20 undifferentiated bullets down
+            # to the 1-3 that actually score is the cheapest part of this whole
+            # change and the part with no blast radius: the model still decides.
+            _narrow_block = self._render_skill_candidate_hint(user_text)
+            if _narrow_block:
+                turn_context = (
+                    f"{turn_context}\n\n{_narrow_block}"
+                    if turn_context
+                    else _narrow_block
+                )
+        # AI Pointer (deictic push): collect the result of the resolution started
+        # above. When the utterance points at the mouse cursor ("was ist das da?")  # i18n-allow
+        # the resolved element rides on this turn's context + a tight crop is
+        # attached only when the element is unlabeled. Unrelated turns ("how's the
+        # weather?") yield ("", None). See docs/plans/ai-pointer/DESIGN.md.
+        pointer_block = ""
+        pointer_image: ImageBlock | None = None
+        if pointer_task is not None:
+            try:
+                pointer_block, pointer_image = await pointer_task
+            except Exception:  # noqa: BLE001 — never crash a turn on pointer context
+                log.debug("AI Pointer per-turn injection skipped", exc_info=True)
+                pointer_block, pointer_image = "", None
+
+        # AI Pointer grounding (2026-06-02): a deictic pointer turn ("worauf zeige
+        # ich?") must be scoped to the CURSOR region so the brain answers from the
+        # cursor element/crop — it must NOT guess the pointing target from the
+        # full-screen permanent-vision image (the live "described something
+        # completely elsewhere" bug). On such a turn we (1) replace the full-screen
+        # image with the tight cursor crop (or none, for a labelled element),
+        # (2) drop the full-screen screenshot + inspect-pointer tools (below), and
+        # (3) inject a "do not guess" instruction when resolution failed.
+        pointing_turn = (not is_smalltalk_turn) and self._is_pointer_intent(user_text)
+        if pointing_turn and not screen_context.has_image:
+            images = (pointer_image,) if pointer_image is not None else ()
+            if not pointer_block:
+                pointer_block = (
+                    "[AI Pointer] The user asked what they are pointing at, but the "
+                    "element under the cursor could not be read right now. Tell them "
+                    "you cannot tell what is under the cursor at the moment — do NOT "
+                    "guess from the rest of the screen."
+                )
+            turn_context = (
+                f"{turn_context}\n\n{pointer_block}" if turn_context else pointer_block
+            )
+
+        # Drag-drop SILENT context: pictures parked by ``add_dropped_context``
+        # (a drop never triggers its own turn) are pulled into THIS real turn,
+        # once — added AFTER vision + AI-Pointer image logic so neither clobbers
+        # them. Cleared on consume; never re-sent on later turns.
+        _dropped_imgs = getattr(self, "_pending_drop_images", ()) or ()
+        if _dropped_imgs:
+            self._pending_drop_images = ()
+            images = tuple(_dropped_imgs) + tuple(images)
+
+        # Grounded per-tool ack (perceived-latency): built ONCE per turn so a
+        # provider-chain retry cannot double-announce. The loop fires it the
+        # moment a tool is actually selected; None when the feature is off or
+        # this is a Voice-Control utterance.
+        _tool_ack_emitter = (
+            self._build_tool_ack_emitter(user_text) if emit_tool_ack else None
+        )
+
+        vision_capable_seen = False
+        if images:
+            chain = self._lead_vision_chain(chain)
+        screen_turn_t0 = time.perf_counter() if images else None
+
+        for idx, (prov_name, model) in enumerate(chain):
+            # Skip providers already marked dead in THIS turn.
+            # Example: gemini-fast fails with missing_key → gemini-deep would
+            # still be in the chain but would fail for the same reason. Skip
+            # saves an avoidable subprocess/network call. An overridden turn
+            # runs on its own credential scope, so the voice brain's dead-list
+            # is not its truth.
+            if turn_override is None and prov_name in self._dead_providers:
+                continue
+            # Model-scoped dead-list: this exact (provider, model) took a
+            # billing rejection earlier THIS turn but the provider itself
+            # was kept alive because another model was still untried — see
+            # `_dead_provider_models`.
+            if turn_override is None and (prov_name, model) in self._dead_provider_models:
+                continue
+            # Circuit breaker: skip rate-limited providers during cooldown
+            if not self._rate_tracker.is_available(prov_name, model):
+                log.debug("Skip rate-limited: %s(%s)", prov_name, model)
+                provider_errors.append(
+                    (prov_name, model, "skipped_cooldown",
+                     "still in 30s rate-limit cooldown"))
+                continue
+
+            try:
+                # The classic call keeps its two-argument shape (tests and
+                # callers replace ``_get_brain`` with that signature); only an
+                # overridden turn asks for its own credential scope.
+                brain = (
+                    self._get_brain(prov_name, model, scope=turn_override.credential_scope)
+                    if turn_override is not None
+                    else self._get_brain(prov_name, model)
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                msg = str(exc)
+                kind = _classify_provider_error(msg, default="init_fail")
+                # On missing_key: remove provider from the chain for the rest
+                # of the session. Prevents each voice turn from running 8x
+                # sequentially against the same missing keys. Never for an
+                # overridden turn: its key is the chat's, not the voice's.
+                if (
+                    turn_override is None
+                    and kind in _DEAD_LIST_KINDS
+                    and prov_name not in self._dead_providers
+                ):
+                    self._dead_providers.add(prov_name)
+                    if kind == "missing_key":
+                        log.warning(
+                            "Provider %s ohne API-Key — fuer diese Session deaktiviert. "
+                            "Setup: Sidebar -> API-Keys.", prov_name)
+                    else:
+                        log.warning(
+                            "Provider %s account-blocked (Credit/Quota/Tier) — "
+                            "fuer diese Session deaktiviert. Detail: %s",
+                            prov_name, msg[:160])
+                else:
+                    log.debug(
+                        "Brain %s(%s) konnte nicht instantiiert werden: %s",
+                        prov_name, model, exc)
+                provider_errors.append((prov_name, model, kind, msg[:200]))
+                continue
+
+            # Attached pixels are evidence, not decoration. A provider that
+            # cannot inspect them must never answer as though it had; skip it
+            # by runtime capability and preserve the normal cross-family retry
+            # order for the remaining vision-capable providers.
+            if images and getattr(brain, "supports_vision", False) is not True:
+                provider_errors.append(
+                    (prov_name, model, "vision_unsupported", "vision unsupported")
+                )
+                log.info(
+                    "Skipping %s(%s): this turn carries an image but the "
+                    "provider does not advertise vision support",
+                    prov_name,
+                    model,
+                )
+                continue
+            if images:
+                vision_capable_seen = True
+
+            _turn_tools = (
+                # Captured-screen turn: the pixels answer it, but the surface is
+                # NARROWED, not emptied — a look glued to an action still needs
+                # its vehicle, and cu_gate enforces the look/operate boundary per
+                # call (see _image_turn_tool_override).
+                self._image_turn_tool_override()
+                if screen_context.has_image
+                else self._smalltalk_tool_override() if is_smalltalk_turn
+                # Non-smalltalk turn: drop plugin tools irrelevant to this
+                # utterance (progressive disclosure), then hide any plugin whose
+                # CLI counterpart is connected (req 4: CLI > plugin fallback).
+                else self._suppress_plugins_covered_by_cli(
+                    self._apply_plugin_relevance(routing_text, self._tools), routing_text
+                )
+            )
+            # Skill inline-injected (AD-S4): drop run-skill so a weak model
+            # cannot make a redundant, garbled run-skill tool call — the
+            # gemini-fast ``<call:tool.run-skill ...>`` text leak. The
+            # instructions already ride on the turn context, so execution is
+            # provider-/model-agnostic (no tool call needed).
+            _turn_tools = self._drop_run_skill_when_inline_injected(_turn_tools)
+            # Knowledge-question spawn-hide (forensic 2026-06-27): a plain
+            # factual question ("Welche Unternehmen haben so viel Speicherplatz?")
+            # must not be able to reach spawn_worker — the router-LLM reflexively
+            # delegated it ("ich ziehe einen Experten hinzu") instead of answering
+            # inline. The deterministic force-spawn gate already stood down; this
+            # removes the spawn tools from the LLM surface so the reflex has no
+            # tool to grab. search_web / reads / computer_use stay visible.
+            if isinstance(_turn_tools, dict):
+                _turn_tools = self._hide_spawn_on_knowledge_question(
+                    _turn_tools, user_text
+                )
+            # N-13: ambiguous/unavailable canonical project state must never
+            # silently become an unscoped background mission. Keep the
+            # canonical context visible so the model can ask for clarification,
+            # but remove every spawn vehicle from this turn's tool surface.
+            if project_delegation_blocked and isinstance(_turn_tools, dict):
+                _turn_tools = {
+                    name: tool
+                    for name, tool in _turn_tools.items()
+                    if name not in _SPAWN_TOOL_NAMES
+                }
+            # Signalless-turn action-hide (forensic 2026-06-27): inside a live
+            # desktop episode a turn with NO actionable signal of its own ("Was
+            # geht ab?" mis-heard as "Lask it up!" conf 0.509) must not reach
+            # computer_use/spawn — the router-LLM would otherwise INHERIT the
+            # previous turn's CU action from the conversation context. Outside an
+            # episode there is nothing to inherit and the vehicle stays.
+            if isinstance(_turn_tools, dict):
+                _turn_tools = self._hide_action_tools_on_signalless_turn(
+                    _turn_tools, user_text
+                )
+            # Plugin-tool spawn-hide (forensic 2026-06-27, voice 17:44): "Schau
+            # mal nach was in meinem Google Calendar am 29. ist" spawned a worker
+            # ("umfangreicheres Stueck Arbeit") that has no google_calendar tool
+            # (plugin tools are router-tier only, AP-5/AP-14) -> "kann ich nicht".
+            # When a connected plugin's usage-card keywords match the turn, drop
+            # the spawn vehicles so the router uses the plugin tool DIRECTLY.
+            if isinstance(_turn_tools, dict):
+                _turn_tools = self._hide_spawn_when_plugin_tool_handles_turn(
+                    _turn_tools, routing_text
+                )
+            # Agentic-IDE pane tools exist only relative to an OPEN workspace
+            # (2026-07-28 cost audit): with none open they can only fail,
+            # while their schemas ride every loop iteration. Status/resume
+            # always stay visible.
+            if isinstance(_turn_tools, dict):
+                _turn_tools = self._hide_agentic_ide_tools_without_workspace(
+                    _turn_tools
+                )
+            # An artifact is built when the user asks to SEE something, never
+            # because an answer might look nicer as a page (maintainer mandate
+            # 2026-08-11). Structural, not prompt-level: on a turn that did not
+            # ask, the model never sees the tool — and never pays for its schema
+            # or starts a background mission.
+            if isinstance(_turn_tools, dict):
+                _turn_tools = self._hide_artifact_tool_without_request(
+                    _turn_tools, user_text
+                )
+            # A referential follow-up that inherited a currently registered
+            # plugin/MCP tool remains inline even when that tool has no usage
+            # card. The explicit heavy-work and artifact requests above retain
+            # their normal mission path.
+            if (
+                isinstance(_turn_tools, dict)
+                and contextual_tool_names
+                and not self._is_explicit_heavy_request(user_text)
+                and not self._research_wants_artifact(user_text)
+            ):
+                _turn_tools = {
+                    name: tool
+                    for name, tool in _turn_tools.items()
+                    if name not in _SPAWN_TOOL_NAMES
+                }
+            # PC-control run-skill hide (forensic 2026-07-02, voice 20:28): "ein
+            # Terminal öffnen, Cloud-Code öffnen, … ein Prompt geben" — an
+            # explicit desktop request — was hijacked by the semantically-similar
+            # cloud-debug skill via the SKILLS-FIRST rule and dead-ended in the
+            # capability refusal. When the user names the desktop vehicle,
+            # computer_use is authoritative — drop run-skill from the surface.
+            if isinstance(_turn_tools, dict):
+                _turn_tools = self._hide_run_skill_on_pc_control_turn(
+                    _turn_tools, user_text
+                )
+            # Scheduled work for an agent is a routine, never a draft skill
+            # with a cron line (live 2026-09-29: "every day at 8" became an
+            # inactive skill while the routine was reported as set up).
+            if (
+                isinstance(_turn_tools, dict)
+                and self._evidence_required_tool == "society-create-routine"
+            ):
+                _turn_tools = {n: t for n, t in _turn_tools.items() if n != "create-skill"}
+            # AI Pointer: on a deictic pointer turn the cursor crop is already the
+            # only attached image, so drop the redundant ``inspect-pointer`` PULL
+            # tool (calling it produced an empty spoken answer — observed live).
+            # The full-screen ``screenshot`` tool is deliberately KEPT: removing it
+            # made the router refuse "Was siehst du hier?" with "I lack a tool"
+            # (the capability gate maps "see" to a vision tool). With the tool
+            # present there is no refusal, and the injected crop + prompt steer the
+            # brain to answer from the crop, not the whole screen. See
+            # docs/plans/ai-pointer/DESIGN.md.
+            if pointing_turn and isinstance(_turn_tools, dict):
+                _turn_tools = {
+                    k: v for k, v in _turn_tools.items() if k != "inspect-pointer"
+                }
+            # Screen-relevance gate (2026-06-14): the on-demand ``screenshot``
+            # tool is only in scope when the utterance refers to the screen (or
+            # an image is attached / it is a pointer turn). On a plain
+            # conversation or cut-off small-talk fragment the brain must not be
+            # able to reach for — and then narrate — the screen.
+            if isinstance(_turn_tools, dict):
+                _turn_tools = self._gate_screen_tool(
+                    _turn_tools,
+                    user_text=user_text,
+                    has_image=bool(images),
+                    pointing_turn=pointing_turn,
+                )
+            # A brain that cannot inspect pixels must never be OFFERED the
+            # screenshot tool — see _hide_screenshot_for_blind_brain.
+            if isinstance(_turn_tools, dict):
+                _turn_tools = self._hide_screenshot_for_blind_brain(
+                    _turn_tools, brain, prov_name=prov_name, model=model
+                )
+            if turn_override is not None:
+                # The caller's extra hands (a chat's folder tools) join the
+                # surface AFTER every gate above, and a plan-mode filter runs
+                # last — the gates decide what Jarvis may reach for, the
+                # override only adds a folder and, in plan mode, takes the
+                # writing hands away.
+                _turn_tools = self._apply_turn_override_tools(_turn_tools, turn_override)
+            # Active-model self-awareness: stamp the provider/model that is about
+            # to answer so _build_system_prompt injects the correct, specific
+            # self-identity (anti-"I'm Gemini" hallucination, forensic 2026-06-20).
+            # Set here — after dead/cooldown skips — so it always names the
+            # provider that genuinely runs this attempt, including a fallback win.
+            self._active_turn_identity = (prov_name, model)
+            # Delegated realtime voice turns get hard loop bounds so an
+            # unbounded delegate can never run away (live 2026-07-14: 14
+            # rounds / 66 s on "what is in my wiki"). They are ceilings, not
+            # targets — see _DELEGATE_MAX_TURNS for why the round budget and
+            # the wall clock carry different numbers. On either bound the loop
+            # forces ONE final tool-less round over the evidence already
+            # gathered, so the user still hears a grounded answer. Classic
+            # turns call with the unchanged signature (kwargs only on
+            # delegation).
+            _disp_kwargs: dict[str, Any] = (
+                {
+                    "max_turns": _DELEGATE_MAX_TURNS,
+                    "deadline_s": _DELEGATE_DEADLINE_S,
+                    "reasoning_effort": _DELEGATE_REASONING_EFFORT,
+                    "delegated_voice": True,
+                }
+                if prefer_tool_model
+                else self._override_dispatch_kwargs(turn_override)
+            )
+            if project_scope is not None:
+                _disp_kwargs.update(
+                    project_id=project_scope.project_id,
+                    task_id=project_scope.task_id,
+                    project_root=project_scope.project_root,
+                )
+            disp = self._build_dispatcher(
+                brain, tools_override=_turn_tools, **_disp_kwargs
+            )
+            # Intelligent router: the router LEAD must NOT stream its conversational
+            # text to TTS. On the streaming path (generate_stream) text_consumer
+            # speaks each chunk live DURING dispatch — so a no-tool router answer
+            # would be spoken and THEN the fall-through talker would speak again
+            # (double answer). Suppress the consumer for the lead: if it picks a
+            # tool, the result is surfaced by generate_stream's final reconciliation
+            # (nothing was yielded → it yields holder["final"]); if it picks none,
+            # the chosen talker streams the answer normally after the fall-through.
+            _is_router_lead = self._router_lead_key == (prov_name, model)
+            _attempt_consumer = None if _is_router_lead else text_consumer
+            try:
+                # CostMeter: start per-trace tracking (idempotent if already started).
+                if self._cost_meter is not None:
+                    self._cost_meter.start(trace_uuid, prov_name, model)
+                agg = await disp.dispatch(
+                    user_text,
+                    images=images,
+                    history=history,
+                    trace_id=trace_id,
+                    intent_level=decision.level,
+                    evidence_required_tool=self._evidence_required_tool,
+                    text_consumer=_attempt_consumer,
+                    ack_emitter=_tool_ack_emitter,
+                    on_progress=on_progress,
+                    turn_context=turn_context,
+                    reply_language=self._reply_language,
+                    conversation_language=self._conversation_language,
+                    voice_confirm=(allow_voice_confirm and self._voice_confirm_enabled),
+                )
+                # Post-call cost hook: aggregated usage → meter.
+                # The meter cancels on overrun via CancelToken (see ADR-0006);
+                # the pre-call gate above catches that on the next turn.
+                if self._cost_meter is not None and agg.usage:
+                    usd = _estimate_usd_from_usage(self._cost_meter, model, agg.usage)
+                    self._cost_meter.add(CostRecord(
+                        trace_id=trace_uuid, provider=prov_name, model=model,
+                        tokens_in=int(agg.usage.get("input_tokens", 0)),
+                        tokens_out=int(agg.usage.get("output_tokens", 0)),
+                        tokens_cache_hit=int(agg.usage.get("cache_hit_tokens", 0)),
+                        usd=usd, timestamp_ns=time.time_ns(),
+                    ))
+                # Empty-Response-Guard: wenn der Provider zwar erfolgreich
+                # antwortet aber **leeren** Content liefert (Safety-Block,
+                # truncated-Response, Schema-Mismatch), behandeln wir das wie
+                # einen Soft-Fail und gehen zum naechsten Provider in der
+                # Chain. Frueher: response_text = "" + break → die globale
+                # `if not response_text`-Logik unten verschickte dann irrefuehrend
+                # "Provider X, Y unerreichbar" statt einen anderen Provider zu
+                # probieren. Empty != fail-permanently, aber empty != success.
+                #
+                # 2026-04-29 Fix: Tool-Calls + suppress_response sind LEGITIME
+                # leere Texte. Beispiel: spawn_worker ist fire-and-forget
+                # mit suppress_response=True; der Tool-Use-Loop setzt dann
+                # final_agg.text="" und finish_reason="suppress_response". Vorher
+                # hat das den Empty-Response-Guard getriggert, der dann zum
+                # naechsten Provider gefallen ist — der hat denselben Spawn
+                # nochmal probiert. Die Folge: 3 Provider gecallt, 2 Spawns
+                # abgelehnt, drittes fiel auf multi_spawn zurueck und
+                # scheiterte ebenfalls.
+                response_empty = not (agg.text or "").strip()
+                # A REQUESTED tool call only excuses empty text when a tool
+                # could actually have run. On a turn that offered NO tools at
+                # all — a Screen Context turn strips every one of them — a
+                # model-emitted call executed nothing by construction, so
+                # treating it as a legitimate silence is always wrong.
+                #
+                # Live 2026-08-02 09:58: "kannst du bitte schnell einen
+                # Screenshot machen?" captured the screen correctly, the one
+                # vision-capable provider in the chain answered with 1170
+                # tokens of reasoning, zero text and finish_reason=tool_calls,
+                # this guard read it as legitimate, no other provider was
+                # tried, and the user heard "that didn't work just now" while a
+                # fresh screenshot sat unused. Gating on ``_turn_tools`` keeps
+                # the tools-present behaviour byte-identical, so no executed
+                # side effect can ever be re-run by a fallback.
+                tool_calls_executed = bool(agg.tool_calls) and bool(_turn_tools)
+                suppressed = (agg.finish_reason == "suppress_response")
+                if response_empty and not tool_calls_executed and not suppressed:
+                    log.warning(
+                        "Brain %s(%s) lieferte leeren Content — "
+                        "vermutlich Safety-Block oder Empty-Response. "
+                        "Versuche naechsten Provider in der Chain.",
+                        prov_name, model,
+                    )
+                    provider_errors.append((
+                        prov_name, model, "empty_response",
+                        "Provider gab leere Antwort zurueck (Safety/Schema?)",
+                    ))
+                    continue
+
+                # INTELLIGENT ROUTER fall-through: this attempt is the tool-capable
+                # router LEAD that was prepended for a tool-incapable talker. It got
+                # first crack at tool selection; if it picked NO tool (pure
+                # conversation) and a chosen talker follows in the chain, discard
+                # its answer and fall through so the user keeps their selected
+                # brain's voice. A tool it DID select (tool_calls non-empty) breaks
+                # normally below and IS the turn's result. Placed BEFORE the events
+                # publish below, so the discarded router turn is not recorded as the
+                # turn; its cost was metered above (it genuinely ran). Reversible
+                # via [brain.routing].intelligent_router (then _router_lead_key is
+                # never set, so this never fires).
+                if (
+                    self._router_lead_key == (prov_name, model)
+                    and not tool_calls_executed
+                    and idx < len(chain) - 1
+                ):
+                    log.info(
+                        "Intelligent router: %s picked no tool — falling through to "
+                        "%s for the conversational answer.",
+                        prov_name, chain[idx + 1][0],
+                    )
+                    continue
+
+                response_text = agg.text
+                # Honest mid-answer error notice (AD-OE6): the model round
+                # AFTER tool execution died mid-stream (the provider sent
+                # finish_reason="error") and produced no text. The empty-
+                # response guard above is correctly skipped when tool calls
+                # exist, so without this branch the turn counts as a success
+                # with empty text and the user hears NOTHING (forensic
+                # 2026-07-05, session 3e27dd8e, 223k-token round). Do NOT
+                # fall through to the next provider — the executed tools
+                # would re-run their side effects; speak honestly instead.
+                if (
+                    response_empty
+                    and tool_calls_executed
+                    and str(agg.finish_reason or "") == "error"
+                ):
+                    response_text = _MID_ANSWER_ERROR_PHRASES.get(
+                        self._resolve_turn_lang(), _MID_ANSWER_ERROR_PHRASES["de"]
+                    )
+                    log.warning(
+                        "Brain %s(%s): stream ended finish_reason=error AFTER "
+                        "%d tool call(s) — speaking the honest mid-answer "
+                        "error notice instead of an empty (silent) turn.",
+                        prov_name, model, len(agg.tool_calls),
+                    )
+                # Record whether THIS (winning) turn was a fire-and-forget
+                # ``suppress_response`` spawn, so the voice pipeline can stay
+                # silent for it but speak a clarifying question for a different
+                # empty turn (function_call/CU without speech). See
+                # ``SpeechPipeline._handle_silent_brain_turn``.
+                self._last_turn_suppressed = suppressed
+                # AD-OE6 companion signal #2: did THIS winning turn SUCCESSFULLY
+                # execute a desktop-action tool (computer_use / open_app / …)?
+                # If so and it produced no narration, the voice pipeline speaks
+                # a success confirmation instead of a clarifying question
+                # (live bug 2026-06-09). Read ``executed_tool_names`` — the tools
+                # that REALLY ran — not ``tool_calls`` (which also holds calls a
+                # guard blocked, e.g. computer_use refused on a how-to question);
+                # speaking "Erledigt." for a blocked action would be a lie.
+                executed = getattr(agg, "executed_tool_names", None) or set()
+                self._last_turn_executed_action_tool = bool(
+                    set(executed) & _DESKTOP_ACTION_TOOL_NAMES
+                )
+                # Remember the tools that REALLY ran so the post-recovery
+                # evidence-gate enforcement (below) can tell whether a mandated
+                # tool was actually called this turn.
+                _turn_executed = set(executed)
+                used_provider, used_model = prov_name, model
+
+                # Bug C Fix (2026-04-29) — BrainTurnStarted/Completed publishen
+                # NUR wenn der Brain-Call erfolgreich war (Stream lieferte
+                # Tokens oder Tool-Calls). Vorher: Event wurde publisht bevor
+                # _ensure_client crashte → Halluzinations-Tag in voice_turns
+                # ("openai/gpt-4o" ohne Key). Jetzt: wir wissen dass dieser
+                # Call wirklich Daten lieferte (`continue`-Pfade kommen hier
+                # nicht an), also schreiben wir nur den ECHTEN Provider in
+                # die Voice-Session-DB.
+                tokens_in_total = int(agg.usage.get("input_tokens", 0)) if agg.usage else 0
+                tokens_out_total = int(agg.usage.get("output_tokens", 0)) if agg.usage else 0
+                # Every plugin reports cache hits under the protocol key and
+                # keeps ``input_tokens`` to the uncached share.
+                tokens_cached_total = int(agg.usage.get("cache_hit_tokens", 0)) if agg.usage else 0
+                cost_usd_total = 0.0
+                try:
+                    from jarvis.brain.cost import (
+                        calculate_cost_usd,
+                        ensure_pricing_for,
+                    )
+                    # A model the static table has never heard of is priced
+                    # from the provider feed — ONE refresh per model per
+                    # process (capped at 3 s), so a new generation stops
+                    # shipping as "$0.00" until someone edits the table.
+                    if tokens_in_total > 0 or tokens_out_total > 0 or tokens_cached_total > 0:
+                        await ensure_pricing_for(model)
+                    cost_usd_total = calculate_cost_usd(
+                        model, tokens_in_total, tokens_out_total, tokens_cached_total
+                    )
+                    if cost_usd_total == 0.0 and tokens_in_total > 0:
+                        # An unknown model prices as $0.00 and every surface
+                        # then renders the turn as free — that silence is how
+                        # 1.87M deepseek tokens went unbilled for a month
+                        # (2026-07-28 cost audit). Say it once per turn.
+                        log.warning(
+                            "No pricing for model %r (static table and "
+                            "provider feed) — %d in / %d out tokens recorded "
+                            "as $0.00; add it to jarvis/brain/cost.py "
+                            "PRICING_USD_PER_MTOK",
+                            model, tokens_in_total, tokens_out_total,
+                        )
+                except Exception:  # noqa: BLE001
+                    log.warning(
+                        "Cost calculation failed for model %r — recording $0.00",
+                        model, exc_info=True,
+                    )
+                await self._bus.publish(BrainTurnStarted(
+                    provider=prov_name,
+                    model=model,
+                    intent_level=decision.level,
+                ))
+                await self._bus.publish(BrainTurnCompleted(
+                    provider=prov_name,
+                    model=model,
+                    tokens_in=tokens_in_total,
+                    tokens_out=tokens_out_total,
+                    tokens_cached=tokens_cached_total,
+                    cost_usd=cost_usd_total,
+                    text_len=len(response_text or ""),
+                    finish_reason=str(getattr(agg, "finish_reason", "ok") or "ok"),
+                ))
+                if turn_override is not None:
+                    turn_override.receipt.record(
+                        provider=prov_name,
+                        model=model,
+                        tokens_in=tokens_in_total,
+                        tokens_out=tokens_out_total,
+                        cost_usd=cost_usd_total,
+                        finish_reason=str(getattr(agg, "finish_reason", "ok") or "ok"),
+                    )
+
+                if idx > 0:
+                    log.info(
+                        "Fallback-Hit: %s(%s) — %d provider übersprungen",
+                        prov_name, model, idx,
+                    )
+                if screen_turn_t0 is not None:
+                    log.info(
+                        "screen-turn answered by %s(%s) in %d ms (skipped=%d)",
+                        prov_name,
+                        model,
+                        int((time.perf_counter() - screen_turn_t0) * 1000),
+                        idx,
+                    )
+                    # Under an override the pick answering after its router
+                    # lead is the plan, not a fallback: the sidebar and its
+                    # "Brain -> X" toast follow this event, and the live brain
+                    # did not move (review 2026-08-25).
+                    if turn_override is None:
+                        await self._bus.publish(BrainProviderSwitched(
+                            from_provider=self._active_name,
+                            to_provider=prov_name,
+                        ))
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                msg = str(exc)
+                # Classify FIRST so a terminal-billing 429 ("credits depleted",
+                # "insufficient_quota") is treated as a DEAD provider, not a
+                # transient rate-limit that keeps the empty provider leading the
+                # chain every turn (live forensic 2026-06-28: a depleted Gemini
+                # router bricked the whole turn even though OpenRouter was funded
+                # — AP-22). Only a genuinely transient 429 takes the cooldown path.
+                kind = _classify_provider_error(msg, default="call_fail")
+                if kind == "rate_limit":
+                    self._rate_tracker.mark_rate_limited(prov_name, model)
+                    log.warning("Rate-Limited %s(%s) — 30s Cooldown aktiviert", prov_name, model)
+                    provider_errors.append(
+                        (prov_name, model, "rate_limit", "HTTP 429"))
+                else:
+                    log.warning("Brain %s(%s) fehlgeschlagen: %s", prov_name, model, exc)
+                    if (
+                        turn_override is None
+                        and kind in _DEAD_LIST_KINDS
+                        and prov_name not in self._dead_providers
+                    ):
+                        # account_blocked (e.g. a bare 402) is model-scoped when
+                        # the SAME provider still has an untried model later in
+                        # this turn's chain (a capped paid model with a funded
+                        # free model behind it, tests/unit/brain/
+                        # test_depleted_credits_classification.py covers only the
+                        # classifier, not this chain policy). missing_key/bad_key
+                        # are credential problems and stay provider-wide — a dead
+                        # key blocks every model, not just this one.
+                        remaining_model = any(
+                            other_name == prov_name
+                            and other_model != model
+                            and (other_name, other_model) not in self._dead_provider_models
+                            for other_name, other_model in chain[idx + 1:]
+                        )
+                        if kind == "account_blocked" and remaining_model:
+                            self._dead_provider_models.add((prov_name, model))
+                            log.warning(
+                                "Model %s(%s) billing-blocked — anderes Modell "
+                                "desselben Anbieters bleibt in dieser Kette aktiv.",
+                                prov_name, model)
+                        else:
+                            self._dead_providers.add(prov_name)
+                            log.warning(
+                                "Provider %s fuer diese Session deaktiviert (%s) — die Kette "
+                                "weicht auf einen anderen verfuegbaren Anbieter aus. "
+                                "Setup: Sidebar -> API-Keys.", prov_name, kind)
+                    provider_errors.append((prov_name, model, kind, msg[:200]))
+                # NOTE BUG-019 (2026-05-11): this generic ``continue`` does
+                # not touch the failing provider's *internal* state. For
+                # most providers that's correct (an HTTP error is purely
+                # transient). For Gemini specifically, however, a 403
+                # "CachedContent not found" means the locally-cached
+                # ``self._cached_content_name`` is stale — and because we
+                # don't clear it here, every subsequent voice turn re-uses
+                # the same dead cache id and re-fails, sending the whole
+                # fallback chain into the 40-second pipeline timeout and
+                # leaving the user with silent THINKING → LISTENING. The
+                # root-cause annotation lives at the actual failure site
+                # in ``jarvis/plugins/brain/gemini.py`` (search for
+                # "BUG-019 ROOT CAUSE"). The right place to fix this is
+                # *inside* the provider (catch the cache-not-found error,
+                # call its own ``invalidate_cache()``, retry without the
+                # cached_content field) — not by leaking Gemini-specific
+                # error matching into this cross-provider chain.
+                continue
+
+        # When `used_provider` is set, AT LEAST ONE provider completed the turn
+        # successfully — even if `response_text` is empty (e.g. suppress_response
+        # for fire-and-forget tools like spawn_worker). In that case do NOT
+        # return the "all failed" message — the UI receives feedback via bus events
+        # (JarvisAgentAnnouncement, etc.).
+        # B5 Agent C: reset per-turn wiki suffix regardless of outcome so
+        # stale context cannot leak into the next voice turn.
+        self._wiki_context_suffix = ""
+
+        if screen_context.has_image and not vision_capable_seen:
+            from jarvis.screen_context.intent import (  # noqa: PLC0415
+                no_vision_provider_reply,
+            )
+
+            language = resolve_output_language(
+                self._reply_language,
+                "unknown",
+                user_text,
+                default=DEFAULT_LOCALE,
+                conversation_language=self._conversation_language,
+            )
+            response_text = no_vision_provider_reply(language)
+            await self._record_response_side_effects(
+                user_text=user_text,
+                response_text=response_text,
+                use_history=use_history,
+                trace_id=trace_uuid,
+            )
+            return response_text
+
+        if used_provider is None:
+            self._last_turn_all_failed = True
+            log.error("Alle %d Provider-Versuche fehlgeschlagen. Letzter Fehler: %s",
+                     len(chain), last_exc)
+            # Developer diagnostic → LOG only. The voice path gets a localized,
+            # provider-agnostic apology (live complaint 2026-06-01: the grok/
+            # Anthropic billing diagnostic was spoken while Gemini was active).
+            log.warning(
+                "Spoken fallback used instead of chain diagnostic: %s",
+                _format_provider_chain_error(provider_errors),
+            )
+            return await self._provider_down_reply(
+                trace_uuid, cause=_primary_provider_down_cause(provider_errors)
+            )
+
+        # Text-serialized calls are recovered inside BrainDispatcher's shared
+        # ToolUseLoop, where the exact turn-scoped tool surface, deadline,
+        # safety guards, and exactly-once tracking remain authoritative. Never
+        # re-parse and execute here against the manager-global tool registry:
+        # that old fallback bypassed per-turn plugin/screen/deadline gates.
+        # Two-turn voice/chat confirmation (turn N): the tool-use loop deferred a
+        # consequential tool and produced a confirmation QUESTION as its text.
+        # Arm the pending state and return the question directly — the leaked-tool
+        # recovery + evidence gate below do not apply to a deferral (no tool ran,
+        # nothing to recover; the answer is a question, not an unverified claim).
+        if (
+            getattr(agg, "finish_reason", "") == "voice_confirm_pending"
+            and getattr(agg, "voice_confirm", None)
+        ):
+            self._arm_voice_confirm(agg.voice_confirm, user_text)
+            await self._record_response_side_effects(
+                user_text=user_text, response_text=agg.text,
+                use_history=use_history, trace_id=trace_uuid,
+            )
+            return agg.text
+
+        # ONE output-language resolution for every honesty phrase this turn
+        # (CLAUDE.md §1: one resolver decides the turn for ALL layers). The two
+        # guards below used to resolve separately with DIFFERENT defaults
+        # ("de" here, DEFAULT_LOCALE there), so an undetectable turn could speak
+        # a German evidence fallback followed by an English honesty phrase in the
+        # same breath. All locales are equal — the shared DEFAULT_LOCALE decides.
+        honesty_lang = resolve_output_language(
+            self._reply_language,
+            "unknown",
+            user_text,
+            default=DEFAULT_LOCALE,
+        )
+
+        # Evidence-gate enforcement (live repro 2026-06-17, session 296abc82):
+        # the gate MANDATED a tool this turn, but neither the normal tool loop
+        # nor the leaked-tool recovery above actually ran it — so the model's
+        # answer is unverified, at worst a confabulation ("the gcloud tool
+        # blocked execution because it classified the request as an explanatory
+        # question"). Replace it with an honest non-data fallback; never speak an
+        # answer a mandated read tool was supposed to ground. Shared-loop leak
+        # recovery has already populated ``_turn_executed`` when it succeeded.
+        if self._evidence_required_tool:
+            _replacement = _unfulfilled_replacement(
+                required_tool=self._evidence_required_tool,
+                executed=_turn_executed,
+                response_text=response_text,
+                suppressed=self._last_turn_suppressed,
+                is_write=self._evidence_required_is_write,
+                lang=honesty_lang,
+                domain=self._evidence_required_domain,
+            )
+            if _replacement is not None:
+                log.warning(
+                    "Mandated tool %s never ran (executed=%s, write=%s) — "
+                    "replacing the unverified answer with an honest fallback.",
+                    self._evidence_required_tool,
+                    sorted(_turn_executed),
+                    self._evidence_required_is_write,
+                )
+                response_text = _replacement
+                if turn_override is not None:
+                    turn_override.receipt.mark_guard_failure("mandated_tool_unfulfilled")
+
+        execution_evidence = set(_turn_executed)
+        full_action_fallback = not execution_evidence and has_unbacked_action_claim(response_text)
+        honest_response = replace_unbacked_action_claim(
+            response_text,
+            executed_tools=execution_evidence,
+            language=honesty_lang,
+        )
+        if honest_response != response_text:
+            log.warning(
+                "Blocked a model action promise with no execution evidence."
+            )
+            response_text = honest_response
+            if full_action_fallback and turn_override is not None:
+                turn_override.receipt.mark_guard_failure("unbacked_action_claim")
+
+        # 4. History + Events
+        if use_history:
+            self._history.append(BrainMessage(role="user", content=user_text))
+            self._history.append(BrainMessage(role="assistant", content=response_text))
+            if len(self._history) > 40:
+                self._history = self._history[-40:]
+
+        await self._publish_response_generated(
+            trace_id=trace_uuid,
+            text=response_text,
+        )
+
+        # Fire-and-forget: the curator extracts personal facts from the turn
+        # and merges them into USER.md / people/*.md in a controlled manner.
+        # Runs async, does not block the response.
+        if self._curator is not None and not (
+            (profile_override := _TURN_OVERRIDE.get()) is not None
+            and profile_override.tool_context.get("tool_origin") == "society"
+        ):
+            try:
+                asyncio.create_task(
+                    self._curator.process_turn(user_text, response_text),
+                    name="curator-process-turn",
+                )
+            except RuntimeError:
+                # No running event loop (sync context) — skip.
+                log.debug("Curator-Task nicht scheduled (kein Event-Loop)")
+
+        return response_text
+
+    def inject_images_for_turn(
+        self, trace_id: UUID, images: tuple[ImageBlock, ...]
+    ) -> None:
+        """Attach ad-hoc ``images`` to the upcoming turn identified by ``trace_id``.
+
+        Used by the drag-drop intake (``jarvis/brain/drop_context.py``) so a
+        dropped picture reaches the multimodal brain. The images are consumed by
+        ``_collect_vision_images`` on that turn and never carry over. A no-op for
+        an empty tuple. ``trace_id`` is unique per turn → race-free.
+        """
+        if not images:
+            return
+        # Defensive: tolerate a manager built via __new__ (some unit tests bypass
+        # __init__), mirroring how _vision_provider is accessed via getattr.
+        if getattr(self, "_pending_turn_images", None) is None:
+            self._pending_turn_images = {}
+        self._pending_turn_images[trace_id] = tuple(images)
+
+    def add_dropped_context(
+        self, text: str, images: tuple[ImageBlock, ...] = ()
+    ) -> None:
+        """Stash drag-and-dropped content as SILENT conversation context.
+
+        A drop must NOT trigger a brain turn — the user keeps the normal speaking
+        flow, and the dropped content is simply remembered and used on the NEXT
+        real turn (a drop while idle is kept for next time; a drop mid-flow joins
+        the running context). The text is appended to history as a user-context
+        message so it is naturally in the next turn's context (and persists for
+        follow-ups); images are parked and consumed once by the next
+        ``generate`` call. getattr-guarded for managers built via ``__new__``.
+        """
+        if text and text.strip():
+            if getattr(self, "_history", None) is None:
+                self._history = []
+            self._history.append(BrainMessage(role="user", content=text.strip()))
+            if len(self._history) > 40:
+                self._history = self._history[-40:]
+        log.info(
+            "📎 DROP CONTEXT stashed: %d text chars, %d images "
+            "(history now %d msgs, pending drop images %d)",
+            len(text or ""), len(images),
+            len(getattr(self, "_history", []) or []),
+            len(getattr(self, "_pending_drop_images", ()) or ()) + len(images),
+        )
+        if images:
+            cur = getattr(self, "_pending_drop_images", ()) or ()
+            self._pending_drop_images = tuple(cur) + tuple(images)
+
+    async def _collect_vision_images(
+        self,
+        *,
+        trace_id: UUID,
+        user_text: str = "",
+        is_smalltalk: bool = False,
+    ) -> tuple[ImageBlock, ...]:
+        """Returns the current screen as an ImageBlock for the brain turn.
+
+        Factory/voice start the VisionContextProvider on the BrainManager.
+        Without this bridge, blobs were captured but the actual brain call
+        remained text-only.
+        """
+        # Drag-drop: ad-hoc images injected for THIS turn win over (and bypass)
+        # the screen-vision path — a dropped picture matters, not the current
+        # screen, and it must arrive even with screen-vision off. Pop so it is
+        # used exactly once. getattr-guarded for managers built via __new__.
+        pending = getattr(self, "_pending_turn_images", None)
+        if pending:
+            injected = pending.pop(trace_id, None)
+            if injected:
+                return injected
+
+        # A turn under a WRITE mandate is an ACTION turn, not a vision turn
+        # (shell-consistency rework 2026-08-08): an attached image narrows the
+        # tool surface downstream (_image_turn_tool_override), and the mandated
+        # write tool is the one it must not lose. "erstell einen Ordner
+        # hier auf dem Desktop" carries the visual marker "hier auf" yet wants
+        # a shell action, not a screen answer — same for a mandated contact/
+        # wiki write. Read mandates are untouched (they never attach anyway:
+        # their data comes from the mandated tool, not the screen).
+        if getattr(self, "_evidence_required_is_write", False):
+            log.info("Vision-Inject skipped: write-mandate action turn")
+            return ()
+
+        vision = getattr(self, "_vision_provider", None)
+        vision_none = vision is None
+        paused = (
+            bool(getattr(vision, "is_paused", False))
+            if vision is not None
+            else None
+        )
+        log.info(
+            "Vision-Inject Diagnose: path=BrainManager vision_none=%s "
+            "is_paused=%s brain_provider=%s",
+            vision_none,
+            paused,
+            self._active_name,
+        )
+        if vision is None or paused:
+            return ()
+
+        # Wave 1 (omni-latency): conditional vision — skip the screenshot on
+        # confidently text-only turns (skip-when-safe). Keep the per-turn image
+        # tax only where the screen might actually matter. Anti-regression vs.
+        # 2026-04-28: when in doubt, the gate keeps the image.
+        perf = getattr(self._config, "performance", None)
+        if getattr(perf, "conditional_vision", False):
+            from jarvis.brain.vision_gate import should_attach_screenshot
+
+            if not should_attach_screenshot(user_text, is_smalltalk=is_smalltalk):
+                log.info("Vision-Inject skipped: text-only turn (%r)", user_text[:60])
+                return ()
+
+        try:
+            from jarvis.brain.router import _read_observation_image_b64
+
+            obs = await asyncio.wait_for(
+                vision.current(), timeout=_VISION_COLLECT_TIMEOUT_S
+            )
+            hash_prefix = (obs.screenshot_hash or "")[:16]
+            geometry = tuple(
+                getattr(obs, "monitor_geom", (0, 0, 0, 0))
+                or (0, 0, 0, 0)
+            )
+            width, height = (
+                (int(geometry[2]), int(geometry[3]))
+                if len(geometry) >= 4
+                else (0, 0)
+            )
+            capture_age_ms = max(
+                0, int((time.time_ns() - obs.timestamp_ns) / 1_000_000)
+            )
+            log.info(
+                "Vision-Inject Observation: screenshot_hash=%s "
+                "dimensions=%dx%d capture_age_ms=%d",
+                hash_prefix,
+                width,
+                height,
+                capture_age_ms,
+            )
+            mime, image_b64 = await _read_observation_image_b64(obs)
+            # Wave 1 (omni-latency): enforce max_image_kb (was dead config) —
+            # cap the per-turn payload before it ships; no-op if already small.
+            from jarvis.vision.image_budget import cap_image_b64
+
+            vcfg = getattr(getattr(self._config.brain, "router", None), "vision", None)
+            max_kb = int(getattr(vcfg, "max_image_kb", 0) or 0)
+            if max_kb > 0:
+                mime, image_b64 = cap_image_b64(mime, image_b64, max_kb * 1024)
+            log.info(
+                "Vision-Inject encoded: brain_provider=%s mime=%s "
+                "screenshot_hash=%s len_image_b64=%d",
+                self._active_name,
+                mime,
+                hash_prefix,
+                len(image_b64),
+            )
+            if self._bus is not None:
+                bytes_size = len(image_b64) * 3 // 4
+                age_ms = int((time.time_ns() - obs.timestamp_ns) / 1_000_000)
+                await self._bus.publish(VisionInjected(
+                    trace_id=trace_id,
+                    screenshot_hash=obs.screenshot_hash,
+                    bytes_size=bytes_size,
+                    capture_age_ms=age_ms,
+                ))
+            return (
+                ImageBlock(
+                    mime=mime,
+                    data_b64=image_b64,
+                    source_hash=obs.screenshot_hash,
+                ),
+            )
+        except TimeoutError:
+            log.warning(
+                "Vision-Inject skipped: capture exceeded %.1fs — proceeding "
+                "text-only (no hot-path hang). brain_provider=%s",
+                _VISION_COLLECT_TIMEOUT_S,
+                self._active_name,
+            )
+            return ()
+        except Exception as exc:  # noqa: BLE001
+            log.error(
+                "Vision-Inject fehlgeschlagen: path=BrainManager "
+                "brain_provider=%s exc=%r",
+                self._active_name,
+                exc,
+                exc_info=True,
+            )
+            return ()
+
+    # Pipeline-Adapter
+    async def __call__(self, text: str) -> str:
+        return await self.generate(text)
+
+    async def generate_stream(
+        self,
+        user_text: str,
+        *,
+        use_history: bool = True,
+        trace_id: UUID | None = None,
+        on_progress: Callable[[], None] | None = None,
+        allow_voice_confirm: bool = False,
+        conversation_id: str | None = None,
+        consume_pending_voice_attachments: bool = False,
+    ) -> AsyncIterator[str]:
+        """Latency sprint 1: streaming variant of ``generate``.
+
+        Yields each brain text chunk in real time. Tool-use loops run as
+        usual; pre-tool-use text is also streamed (the persona prompt forbids
+        fillers, so this is uncritical). Evidence-gated turns are buffered
+        until ``generate`` returns its authoritative final text, because the
+        post-call evidence or action-honesty enforcement may replace an
+        unverified stream.
+
+        ``on_progress`` (stall-timeout signal): forwarded to the tool-use loop,
+        which pings it at every model-round + tool boundary. The speech pipeline
+        passes its ``_mark_brain_progress`` here so its *no-progress* deadline
+        resets while a vision/tool turn is genuinely working but streaming no
+        text (live bug 2026-06-01). ``None`` (default) is a no-op.
+
+        Consumed via an ``asyncio.Queue`` between the producer task
+        (``generate``) and the caller (``async for``). If the caller cancels
+        the generator, the producer is also cancelled.
+
+        Callers can reassemble the final aggregated text from the yielded
+        chunks themselves — a helper may be added later if needed.
+        """
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        sentinel: str | None = None
+        # generate() returns the FINAL text — recovery-corrected when a leaked
+        # tool_use was executed (see _recover_leaked_tool). Streaming previously
+        # discarded this (BUG-028 pattern), so a leaked action-tool reached TTS
+        # as raw JSON and the action was lost. We capture it here.
+        holder: dict[str, str | None] = {"final": None}
+        context = tuple(
+            str(message.content or "")
+            for message in (
+                (getattr(self, "_history", ()) or ())[-8:]
+                if use_history
+                else ()
+            )
+        )
+        action_buffered = plan_turn(user_text, context=context).requires_orchestrator
+
+        def _consumer(chunk: str) -> None:
+            # ``put_nowait`` because the consumer is called on the sync
+            # aggregator path (no await possible). Queue is unbounded.
+            try:
+                queue.put_nowait(chunk)
+            except Exception:  # noqa: BLE001
+                pass
+
+        async def _producer() -> None:
+            try:
+                holder["final"] = await self.generate(
+                    user_text,
+                    use_history=use_history,
+                    trace_id=trace_id,
+                    text_consumer=_consumer,
+                    on_progress=on_progress,
+                    allow_voice_confirm=allow_voice_confirm,
+                    conversation_id=conversation_id,
+                    consume_pending_voice_attachments=(
+                        consume_pending_voice_attachments
+                    ),
+                )
+            finally:
+                # Sentinel signals "brain is done (or crashed)".
+                queue.put_nowait(sentinel)
+
+        task = asyncio.create_task(_producer(), name="brain-stream-producer")
+        accumulated = ""
+        holding = False
+        held = ""
+        leaked = False
+        yielded = False
+        evidence_buffered = False
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is sentinel:
+                    break
+                accumulated += chunk
+                # A provider sometimes streams a tool_use block as TEXT instead
+                # of invoking it ("oeffne den Editor" -> open_app/dispatch JSON).
+                # Withhold those chunks so the raw JSON is never spoken (it would
+                # scrub to silence and the action would be lost). generate()
+                # recovers + executes the leaked tool and returns a speakable
+                # result, which we yield once the stream ends.
+                #
+                # A growing buffer cannot tell a leak from an answer that merely
+                # OPENS with a bracket — "[Doku](…)", a JSON example. So the
+                # shape test only HOLDS the chunks; the verdict is taken once,
+                # after the sentinel, on the finished buffer. Held prose is
+                # released there instead of being dropped for the rest of the
+                # turn, which is what used to swallow such answers whole.
+                if not holding and _may_be_tool_use_leak(accumulated):
+                    holding = True
+                evidence_now = bool(getattr(self, "_evidence_required_tool", ""))
+                if evidence_now:
+                    evidence_buffered = True
+                if holding:
+                    held += chunk
+                    continue
+                if evidence_now:
+                    continue
+                if action_buffered:
+                    continue
+                yield chunk
+                yielded = True
+            if holding:
+                leaked = _looks_like_tool_use_leak(accumulated)
+                if (
+                    not leaked
+                    and not evidence_buffered
+                    and not action_buffered
+                    and held.strip()
+                ):
+                    # Never a tool call — ordinary speech that happened to open
+                    # with "[" or "{". The user gets the whole answer.
+                    yield held
+                    yielded = True
+            # Surface generate()'s authoritative final text whenever NOTHING was
+            # streamed to TTS — either because a leaked tool_use JSON was
+            # withheld, OR because the brain produced a STRUCTURED / suppress
+            # tool-call with no text chunks at all (dispatch_to_harness result,
+            # spawn_worker ACK, recovered tool). Without this the user hears
+            # silence on exactly those action turns — live repro 2026-05-25
+            # "oeffne mir Chrome" returned empty while plain chat worked. The
+            # old code only surfaced the final on the leaked-JSON path.
+            if leaked or not yielded or evidence_buffered or action_buffered:
+                final = (holder.get("final") or "").strip()
+                if final and not _looks_like_tool_use_leak(final):
+                    yield final
+                elif leaked:
+                    yield await render_readback(
+                        getattr(self, "_readback_composer", None),
+                        instruction=(
+                            "A tool action was recognized but could not be "
+                            "carried out; tell the user plainly."
+                        ),
+                        language=self._direct_ack_language(user_text),
+                        canned=lambda: self._action_failed_phrase(user_text),
+                    )
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+
+    # ------------------------------------------------------------------
+    # Summarize — for Jarvis-Agent-Announcements (Phase 5, Wave-4 rebrand)
+    # ------------------------------------------------------------------
+
+    async def summarize(self, text: str, *, max_tokens: int = 120) -> str:
+        """Compresses text via the fast model of the active provider.
+
+        Purpose: TTS announcements in 1-2 sentences, suitable for speech output.
+        The stream is fully aggregated and capped at ~max_tokens * 4 characters
+        (rough UTF-8 token heuristic).
+        """
+        if not text.strip():
+            return ""
+
+        brain = self._get_brain(self._active_name, self._fast_model(self._active_name))
+        system_prompt = (
+            "Du fasst Texte in 1-2 Saetzen zusammen, klar und praezise fuer "
+            "Sprachausgabe. Antworte ausschliesslich mit der Zusammenfassung."
+        )
+        req = BrainRequest(
+            messages=(
+                BrainMessage(
+                    role="user",
+                    content=f"Fasse in 1-2 Saetzen zusammen, klar und praezise fuer Sprachausgabe: {text}",
+                ),
+            ),
+            system=system_prompt,
+            temperature=0.3,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+
+        agg = await aggregate(brain.complete(req))
+        summary = (agg.text or "").strip()
+
+        char_cap = max_tokens * 4
+        if len(summary) > char_cap:
+            summary = summary[:char_cap].rstrip()
+        return summary
+
+    # ------------------------------------------------------------------
+    # Tool-Registry
+    # ------------------------------------------------------------------
+
+    def set_tools(self, tools: dict[str, Tool]) -> None:
+        self._tools = dict(tools)
+
+    def add_tool(self, tool: Tool) -> None:
+        self._tools[tool.name] = tool
+
+    def clear_history(self) -> None:
+        self._history = []
+        self.__dict__.pop("_voice_history_seed", None)
+
+    def drop_last_turn(self, expected_user_text: str) -> bool:
+        """Remove the most recent (user, assistant) pair when its user message
+        matches ``expected_user_text`` (whitespace-insensitive).
+
+        Used by the voice continuation-recombine path: when a combined turn
+        supersedes the immediately-preceding committed turn, the truncated half
+        must not be duplicated in history. Safe no-op when fewer than two
+        messages are buffered, when the tail is not a user/assistant pair, or
+        when the tail user text does not match — so it does nothing when the
+        prior turn was aborted before commit (the common interrupt case).
+        Returns ``True`` iff a pair was removed.
+        """
+        if len(self._history) < 2:
+            return False
+        last = self._history[-1]
+        prev = self._history[-2]
+        if last.role != "assistant" or prev.role != "user":
+            return False
+        if (prev.content or "").strip() != (expected_user_text or "").strip():
+            return False
+        del self._history[-2:]
+        return True
+
+    # Roles the brain conversation buffer accepts for seeding. ``tool``
+    # messages need a tool_call_id pairing and are never seeded standalone;
+    # UI-only roles (e.g. ``preamble`` pre-ack bubbles) are not conversation.
+    _SEEDABLE_ROLES: frozenset[str] = frozenset({"user", "assistant", "system"})
+    # Same window the auto-append paths enforce (see the ``self._history =
+    # self._history[-40:]`` trims throughout generate()/force-spawn).
+    # Maintainer mandate 2026-08-24: full call memory, not a cost window.
+    _HISTORY_MAX: int = 400
+
+    def seed_history(self, turns: Iterable[Any]) -> None:
+        """Preseed the conversation buffer with prior turns.
+
+        Replaces ``_history`` so a re-opened chat (text continuation via
+        ``POST /api/chats/{kind}/{id}/resume``) or a "Speak in this
+        conversation" voice session (``.../speak``) continues coherently.
+        This is the single primitive behind both Chats-manager paths.
+
+        Pure in-memory, no LLM call and no I/O — safe to call before a voice
+        session is armed without touching the voice critical path (AP-9/AP-11).
+
+        Accepts an iterable of :class:`BrainMessage`, ``(role, text)`` tuples,
+        or ``{"role": ..., "content"|"text": ...}`` dicts. Entries whose role
+        is outside :attr:`_SEEDABLE_ROLES` (e.g. the UI-only ``preamble``
+        bubble) and entries with empty text are dropped. The result is capped
+        to :attr:`_HISTORY_MAX`, keeping the most recent turns — an empty
+        input therefore behaves like :meth:`clear_history`.
+        """
+        seeded: list[BrainMessage] = []
+        for item in turns:
+            if isinstance(item, BrainMessage):
+                role: Any = item.role
+                content: Any = item.content
+            elif isinstance(item, dict):
+                role = item.get("role")
+                content = item.get("content", item.get("text"))
+            else:
+                try:
+                    role, content = item
+                except (TypeError, ValueError):
+                    continue
+            if role not in self._SEEDABLE_ROLES:
+                continue
+            if isinstance(content, str):
+                if not content.strip():
+                    continue
+            elif not content:
+                continue
+            seeded.append(
+                item
+                if isinstance(item, BrainMessage)
+                else BrainMessage(role=role, content=content)
+            )
+        self._history = seeded[-self._HISTORY_MAX :]
+        # Explicit archive selection also seeds the next duplex call. Ordinary
+        # generated turns never fill this slot: unrelated calls must stay fresh.
+        self._voice_history_seed = tuple(self._history)
+
+    def take_voice_history_seed(self) -> tuple[BrainMessage, ...]:
+        """Consume an explicit resume once, retaining the text brain's history.
+
+        A single dict pop transfers ownership even when desktop session setup
+        runs on a worker thread. Reconnects reuse the receiving call's copy.
+        """
+        history: tuple[BrainMessage, ...] = self.__dict__.pop("_voice_history_seed", ())
+        return history
+
+    # ------------------------------------------------------------------
+    # Live reload for the CLI tool registry (CLI integration, task 2)
+    # ------------------------------------------------------------------
+
+    def refresh_tools(self) -> None:
+        """Synchronous refresh for callers outside the running event loop."""
+        snapshot = self._build_tool_snapshot()
+        if snapshot is not None:
+            self._apply_tool_snapshot(snapshot)
+
+    async def refresh_tools_async(self) -> None:
+        """Coalesce registry events and build snapshots without blocking the loop."""
+        self._tool_refresh_pending = True
+        task = getattr(self, "_tool_refresh_task", None)
+        if task is None or task.done():
+            async def refresh() -> None:
+                from jarvis.brain.tool_surface import live_tool_surface_fingerprint
+
+                while self._tool_refresh_pending:
+                    self._tool_refresh_pending = False
+                    before = live_tool_surface_fingerprint()
+                    snapshot = await asyncio.to_thread(self._build_tool_snapshot)
+                    if snapshot is not None:
+                        self._apply_tool_snapshot(snapshot)
+                        if live_tool_surface_fingerprint() != before:
+                            self._tool_refresh_pending = True
+
+            task = asyncio.create_task(refresh(), name="brain-tool-refresh")
+            self._tool_refresh_task = task
+        # A cancelled subscriber/turn must not abandon a registry refresh that
+        # other subscribers are awaiting, or cause another concurrent build.
+        await asyncio.shield(task)
+
+    def _build_tool_snapshot(self):
+        """Build replacement dictionaries while preserving the boot-time DI.
+
+        Plugin imports and entry-point scans can block for seconds on cold
+        storage. Running-loop callers execute this on a worker and publish
+        the complete result back on the loop. No tier means no replacement.
+        """
+        tier = getattr(self, "_tier", None)
+        if not tier:
+            log.debug("refresh_tools: no tier set; skipping")
+            return
+        try:
+            # Lazy import: the factory may pull in heavy modules depending on
+            # config (vision, harness). The import happens only on refresh,
+            # not during BrainManager setup.
+            from jarvis.brain.factory import (
+                _load_local_action_tools,
+                _load_tools_for_tier,
+                _resolve_mission_manager,
+            )
+            from jarvis.harness.manager import HarnessManager
+            from jarvis.safety import (
+                ApprovalWorkflow,
+                RiskTierEvaluator,
+                ToolExecutor,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("refresh_tools: factory modules could not be imported: %s", exc)
+            return
+
+        try:
+            # Minimally invasive re-init for the tool load: the existing
+            # ToolExecutor is retained (risk policy + approval are session-stable);
+            # only the tool instances are re-instantiated.
+            executor = self._tool_executor
+            if executor is None:
+                # Fallback: build an executor so tools can still be loaded —
+                # in practice the manager always has one.
+                from jarvis.clis.risk_integration import make_cli_patterns_fn
+                evaluator = RiskTierEvaluator(
+                    self._config.safety,
+                    extra_patterns_fn=make_cli_patterns_fn(),
+                )
+                approval = ApprovalWorkflow(self._bus)
+                executor = ToolExecutor(
+                    self._bus, evaluator, approval,
+                    default_timeout_s=self._config.safety.tool_approval_timeout_s,
+                )
+
+            harness_manager = HarnessManager(bus=self._bus)
+
+            # This rebuild runs on EVERY CLI/MCP connect at boot ("Tool-Registry
+            # refreshed: 29 -> 107"). It must mirror the shared DI references
+            # the boot path passes, or the rebuilt tools lose their managers
+            # (live 2026-06-18: contact/spawn_worker went dark after the first
+            # CLI connected).
+            new_tools = _load_tools_for_tier(
+                tier,
+                bus=self._bus,
+                executor=executor,
+                harness_manager=harness_manager,
+                user_profile=self._user_profile,
+                people=self._people,
+                config=self._config,
+                mission_manager=_resolve_mission_manager(),
+                contacts=self._contacts,
+            )
+            new_local_action_tools = _load_local_action_tools(
+                bus=self._bus,
+                harness_manager=harness_manager,
+                config=self._config,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("refresh_tools: factory call failed: %s", exc)
+            return
+
+        return new_tools, new_local_action_tools
+
+    def _apply_tool_snapshot(self, snapshot) -> None:
+        new_tools, new_local_action_tools = snapshot
+        old_count = len(self._tools)
+        self._tools = new_tools
+        self._local_action_tools = new_local_action_tools
+        # Record what the sources looked like at THIS load, so the per-turn
+        # reconcile (tool_surface.maybe_reconcile_tool_surface) only fires on
+        # genuine drift after a missed BrainToolsChanged.
+        stamp_tool_surface(self)
+        log.info(
+            "Tool-Registry refreshed: %d -> %d tools",
+            old_count, len(new_tools),
+        )
+
+    def attach_to_bus(self, bus: EventBus | None = None) -> None:
+        """Registers live-reload subscriptions on the event bus.
+
+        Called after the factory build (``factory.py``). Currently:
+        - ``BrainToolsChanged`` → ``refresh_tools()``
+        - ``SecretConfigured`` → ``reactivate_provider()`` for the brain
+          provider whose key was just set. Prevents a provider that already
+          failed with "no API key" from being excluded from the fallback chain
+          until the app is restarted.
+        - ``AnnouncementRequested`` (CU-tool-tagged) → mirror the router-tier
+          ``computer_use`` outcome into the live history (subsystem-confusion fix).
+
+        Called separately rather than in ``__init__`` so BrainManager can be
+        constructed for tests without a bus subscription.
+        """
+        from jarvis.core.events import (
+            AnnouncementRequested,
+            BrainToolsChanged,
+            SecretConfigured,
+        )
+
+        target_bus = bus or self._bus
+        if target_bus is None:
+            return
+
+        async def _on_tools_changed(ev: BrainToolsChanged) -> None:
+            log.info("BrainToolsChanged received (reason=%s); refreshing tools", ev.reason)
+            await self.refresh_tools_async()
+
+        target_bus.subscribe(BrainToolsChanged, _on_tools_changed)
+        target_bus.subscribe(AnnouncementRequested, self._on_cu_tool_completion)
+
+        async def _on_secret_configured(ev: SecretConfigured) -> None:
+            if ev.action != "set":
+                return
+            provider = _SECRET_KEY_TO_BRAIN.get(ev.key)
+            if not provider:
+                return
+            self.reactivate_provider(provider)
+            # Fresh-install heal (open-source AP-22/AP-23): on a first run there
+            # is no jarvis.toml, so brain.primary is the packaged code-default
+            # (e.g. claude-api) that the downloader has NO key for. Setting a key
+            # for a DIFFERENT provider used to leave that dead default active, so
+            # the brain kept reporting "not configured" even though a usable key
+            # was now present — the #1 fresh-laptop symptom. If the currently
+            # active provider has no usable credential, promote the provider the
+            # user just keyed to active and persist it. This is NOT the autonomous
+            # self-switch the USER-ONLY / provider_lock mandate forbids: it fires
+            # only in direct response to the user's OWN key-set action (the same
+            # path as a manual "Set as active" click, via config_writer — never
+            # the locked self-mod writer), and it never overrides a provider the
+            # user deliberately selected (one that already has a working key or
+            # OAuth login is left untouched).
+            if provider == self._active_name:
+                return  # reactivate_provider already re-armed the active one
+            if self._active_has_usable_credential():
+                return
+            previous_active = self._active_name
+            try:
+                await self.switch(provider, persist=True)
+                log.info(
+                    "Fresh-install heal: active brain %r had no usable "
+                    "credential; promoted just-keyed provider %r to active and "
+                    "persisted brain.primary.",
+                    previous_active, provider,
+                )
+            except Exception:  # noqa: BLE001 — a subscriber must never kill the bus (AP-18)
+                log.warning(
+                    "auto-activate on key-set failed for provider %r",
+                    provider, exc_info=True,
+                )
+
+        target_bus.subscribe(SecretConfigured, _on_secret_configured)
+
+        from jarvis.core.events import ConfigReloaded
+
+        async def _on_config_reloaded(ev: ConfigReloaded) -> None:
+            # Hot-reload the reply-language pin so a Self-Mod / Control-API write
+            # to ``brain.reply_language`` (SAFE, needs_restart=False) takes effect
+            # on the NEXT turn without an app restart. The event carries only the
+            # changed keys, so re-read the persisted value from disk. Never let a
+            # bad value (ValueError) escape — that would kill the bus (AP-18).
+            if "brain.reply_language" not in ev.changed_keys:
+                return
+            try:
+                import asyncio as _asyncio
+
+                from jarvis.core.config import load_config
+
+                # Off the event loop — load_config() is a blocking disk read and
+                # this subscriber fires on every SAFE-tier config write.
+                cfg = await _asyncio.to_thread(load_config)
+                raw = getattr(cfg.brain, "reply_language", "auto")
+                self.set_reply_language(normalize_reply_language(raw))
+            except Exception:  # noqa: BLE001 — survive without a live switch
+                log.warning("reply-language hot-reload failed", exc_info=True)
+
+        target_bus.subscribe(ConfigReloaded, _on_config_reloaded)
+
+    # ------------------------------------------------------------------
+    # Back-compat aliases (for existing tests)
+    # ------------------------------------------------------------------
+
+    @property
+    def _providers(self) -> dict[str, Brain]:
+        """Back-compat: exposes the cache as {provider_name: active_instance}."""
+        out: dict[str, Brain] = {}
+        for (name, _model), inst in self._brain_cache.items():
+            out.setdefault(name, inst)
+        return out
+
+    @property
+    def _tool_executor_ref(self) -> ToolExecutor | None:
+        return self._tool_executor
+
+    def _get_or_create(self, name: str) -> Brain:
+        """Back-compat wrapper — uses the config model when available."""
+        return self._get_brain(name, self._fast_model(name))
+
+    async def use_deep_model(self) -> bool:
+        deep = self._deep_model(self._active_name)
+        if not deep:
+            return False
+        self._force_level = "deep"
+        return True
+
+    async def use_fast_model(self) -> bool:
+        fast = self._fast_model(self._active_name)
+        if not fast:
+            return False
+        self._force_level = "fast"
+        return True
+
+    @property
+    def dispatcher(self) -> BrainDispatcher:
+        """Back-compat: builds a dispatcher with the fast model of the active provider."""
+        brain = self._get_brain(self._active_name, self._fast_model(self._active_name))
+        return self._build_dispatcher(brain)
+
+    def _select_task_tools(self, allowed_tools: tuple[str, ...]) -> dict[str, Tool]:
+        """Filter the live tool set down to a per-task allowlist.
+
+        Unknown grants (e.g. a plugin that isn't connected) are silently
+        skipped — the task runs with whatever of its allowlist is live.
+
+        A grant is matched by :func:`jarvis.tasks.templates.grant_matches`:
+        exact name, or the plugin prefix of a bridged MCP tool — the grant
+        ``github`` covers every ``github/<tool>``. (Exact matching alone left
+        a template with a ``github`` grant running with ZERO tools.)
+
+        A grant naming one of :data:`_TASK_ONLY_TOOLS` that is NOT in the live
+        (router) set is loaded from its entry point on demand: ``remember`` is
+        deliberately outside ``ROUTER_TOOLS`` (ADR-0011), yet a scheduled
+        task that was granted it must be able to store what it found. The
+        instance is cached per manager and only ever reaches the task's own
+        dispatcher — never the router surface.
+        """
+        from jarvis.clis.capability_provider import equivalent_grants  # noqa: PLC0415
+        from jarvis.tasks.templates import grant_matches  # noqa: PLC0415
+
+        if not allowed_tools:
+            return {}
+        grants = equivalent_grants(allowed_tools)
+        selected = {
+            name: tool for name, tool in self._tools.items()
+            if any(grant_matches(grant, name) for grant in grants)
+        }
+        for grant in grants:
+            if grant in selected or grant not in _TASK_ONLY_TOOLS:
+                continue
+            tool = self._load_task_only_tool(grant)
+            if tool is not None:
+                selected[grant] = tool
+        return selected
+
+    def _load_task_only_tool(self, name: str) -> Tool | None:
+        """Instantiate (once) an entry-point tool that only scheduled tasks
+        may use. Returns ``None`` — and logs why — when it cannot be built,
+        so the task runs with the rest of its allowlist."""
+        cache: dict[str, Tool | None] = self.__dict__.setdefault("_task_only_tool_cache", {})
+        if name in cache:
+            return cache[name]
+        from importlib.metadata import entry_points  # noqa: PLC0415
+
+        tool: Tool | None = None
+        for ep in entry_points(group="jarvis.tool"):
+            if ep.name != name:
+                continue
+            try:
+                tool = ep.load()()
+            except Exception as exc:  # noqa: BLE001 — a broken tool must not kill the task
+                log.warning("task-only tool %r failed to load: %s", name, exc)
+                tool = None
+            break
+        else:
+            log.warning("task-only tool %r has no entry point", name)
+        cache[name] = tool
+        return tool
+
+    async def run_task(
+        self,
+        *,
+        prompt: str,
+        allowed_tools: tuple[str, ...] = (),
+        model_tier: str = "auto",
+        trace_id: UUID | None = None,
+        prefer_api: bool = False,
+    ) -> str:
+        """Keep the selected agent and billing account for the entire scheduled turn."""
+        from jarvis.core.model_selection import (
+            operation_model,
+            use_operation_model,
+            worker_selection,
+        )
+
+        selected = operation_model.get() or worker_selection(self._config)
+        with use_operation_model(selected):
+            return await self._run_task_with_selection(
+                prompt=prompt,
+                allowed_tools=allowed_tools,
+                model_tier=model_tier,
+                trace_id=trace_id,
+                prefer_api=prefer_api,
+            )
+
+    async def _run_task_with_selection(
+        self,
+        *,
+        prompt: str,
+        allowed_tools: tuple[str, ...] = (),
+        model_tier: str = "auto",
+        trace_id: UUID | None = None,
+        prefer_api: bool = False,
+    ) -> str:
+        """Run one isolated agentic turn for a scheduled task.
+
+        The turn sees ONLY the allowlisted tools and runs with an EMPTY
+        history, so it never pollutes the live voice session's ``_history``
+        or sticky model level (a scheduled task fires off the chat path).
+        Tool calls still flow through the shared ``ToolExecutor`` — so
+        read-only (monitor-tier) plugins pass unattended while ask-tier
+        actions still hit the approval gate (which, with no human present,
+        means they block until the unattended-approval wave wires Option B).
+
+        An explicit agent selection stays fixed, including subscription tasks.
+        Until migration selects an agent, the legacy credential-ready provider
+        chain remains available — see :meth:`_task_provider_chain`.
+        A credential / credit / rate-limit
+        error (401/402/403/429 — the same classes the chat path dead-lists
+        or cools down) moves the SAME turn on to the next candidate; any
+        other error propagates so the runner records it in ``last_error``.
+        The persistent active provider is never switched.
+
+        ``prefer_api`` is accepted so a routine whose owner seat already
+        failed (a CLI without Jarvis tools) can retry here without a
+        TypeError. This path is already the API provider chain.
+
+        Returns the final assistant text.
+        """
+        del prefer_api
+        intent = "deep" if model_tier == "deep" else "fast"
+        # A routine whose prompt asks for its result as an artifact is granted
+        # the builder for that turn — the same explicit-word rule the chat gate
+        # applies, so "every morning at 8, my briefing as an artifact" works
+        # without the person knowing the tool has a grant of its own.
+        from jarvis.brain.artifact_gate import wants_artifact  # noqa: PLC0415
+
+        if wants_artifact(prompt) and _ARTIFACT_TOOL_NAME not in allowed_tools:
+            allowed_tools = (*allowed_tools, _ARTIFACT_TOOL_NAME)
+        tools = self._select_task_tools(allowed_tools)
+        from jarvis.core.model_selection import operation_model, worker_selection
+        from jarvis.core.task_agent import run_selected, subscription_seat
+
+        selected = operation_model.get() or worker_selection(self._config)
+        if selected is not None and subscription_seat(selected.provider) is not None:
+            return await run_selected(
+                selection=selected, prompt=prompt, tool_names=tuple(tools), trace_id=trace_id
+            )
+        # The per-turn context (date/time, wiki) rides on the user
+        # message in cache-optimized mode; without it a scheduled turn did not
+        # know what day it was (BUG-212 — the morning brief prompts say "the
+        # date is in your context" and it was not). Legacy mode carries it in
+        # the system prompt and this stays empty.
+        try:
+            turn_context = self._build_turn_context()
+        except Exception:  # noqa: BLE001 — the context block is a nicety
+            log.debug("run_task: turn context skipped", exc_info=True)
+            turn_context = ""
+        attempts = self._task_provider_chain(intent)
+        failures: list[str] = []
+        original: Exception | None = None
+        for index, (name, model) in enumerate(attempts):
+            try:
+                brain = self._get_brain(name, model)
+                dispatcher = self._build_dispatcher(
+                    brain, tools_override=tools,
+                    # ``unattended``: the tool-use loop feeds an unknown tool
+                    # name back and continues instead of ending the turn on
+                    # the spoken "missing tool" phrase (BUG-212).
+                    tool_context={"delivery": "written", "unattended": True},
+                )
+                agg = await dispatcher.dispatch(
+                    prompt, history=[], intent_level=intent, trace_id=trace_id,
+                    turn_context=_scheduled_turn_context(turn_context, tools),
+                )
+                return agg.text or ""
+            except Exception as exc:
+                kind = _classify_provider_error(str(exc), default="call_fail")
+                if kind not in _TASK_FALLBACK_KINDS:
+                    raise
+                original = original or exc
+                failures.append(f"{name}: {_short_provider_error(exc)}")
+                remaining = attempts[index + 1:]
+                if remaining:
+                    log.warning(
+                        "run_task: %s rejected the turn (%s) — trying %s next",
+                        name, kind, remaining[0][0],
+                    )
+                    continue
+                log.warning(
+                    "run_task: %s rejected the turn (%s) and no further "
+                    "credential-ready tool-capable provider is usable", name, kind,
+                )
+        if len(failures) == 1 and original is not None:
+            raise original
+        raise RuntimeError("all brain providers failed: " + "; ".join(failures))
+
+    def _task_provider_chain(self, intent: str) -> list[tuple[str, str | None]]:
+        """The providers a scheduled turn tries, in order.
+
+        The Tool Model leads (the provider and key the user set for tool
+        calls — ``[brain.tool_model]``, the "API Keys" section), then every
+        other credential-ready, tool-capable provider of a different family
+        (:meth:`_hoist_tool_model` over the automatic chain). The chat's
+        active provider is just one candidate in that chain, never the
+        anchor: it used to be the only one, and with OpenRouter at 0 credits
+        every automation died at its action step while a ready Vertex Tool
+        Model sat unused (BUG-212). Without any ready candidate the active
+        provider is tried alone so the caller sees its real error.
+
+        ``deep`` turns swap in the provider's deep model; ``fast``/``auto``
+        run on the Tool Model's own model — the cheapest correct default for
+        an unattended background turn. Capped so an unattended run cannot
+        walk a long chain for minutes.
+        """
+        from jarvis.core.model_selection import operation_model, worker_selection
+
+        selected = operation_model.get() or worker_selection(self._config)
+        if selected is not None:
+            return [(selected.provider, selected.model)]
+        try:
+            ready = self._hoist_tool_model(self._tool_model_base_chain())
+        except Exception:  # noqa: BLE001 — a broken probe must not kill the task
+            log.debug("run_task: tool-model chain unavailable", exc_info=True)
+            ready = []
+        # A scheduled routine runs unattended; it spends the realtime voice key
+        # only when no other ready provider exists (mandate 2026-09-29).
+        ready = self._keep_off_voice_key(ready)
+        chain: list[tuple[str, str | None]] = []
+        for name, model in ready[:_TASK_MAX_ATTEMPTS]:
+            if intent == "deep":
+                model = self._deep_model(name) or model
+            chain.append((name, model))
+        if chain:
+            return chain
+        name = self._active_name
+        model = (
+            (self._deep_model(name) or self._fast_model(name))
+            if intent == "deep" else self._fast_model(name)
+        )
+        return [(name, model)]
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "active_provider": self._active_name,
+            "force_level": self._force_level,
+            "history_size": len(self._history),
+            "tools_available": sorted(self._tools.keys()),
+            "providers_available": self.available_providers(),
+            "providers_failed": self.failed_providers(),
+            "fast_model": self._fast_model(self._active_name),
+            "deep_model": self._deep_model(self._active_name),
+        }
+
+
+#: Entry-point tools a scheduled task may be granted although they are NOT
+#: router tools (ADR-0011 keeps the router a pure dispatcher). Loaded lazily
+#: by ``_select_task_tools`` for the task's own dispatcher only. Never a
+#: spawn tool (AP-5/AP-14).
+_TASK_ONLY_TOOLS: frozenset[str] = frozenset({"remember"})
+
+#: Error classes that make a scheduled task move on to the next provider
+#: family: the dead-list kinds (missing/bad key, 402 credits) plus a rate limit.
+_TASK_FALLBACK_KINDS: frozenset[str] = frozenset(
+    {"missing_key", "account_blocked", "bad_key", "rate_limit"}
+)
+
+#: Most providers one scheduled turn walks before it gives up (BUG-212).
+_TASK_MAX_ATTEMPTS: int = 4
+
+def _scheduled_turn_context(turn_context: str, tools: dict[str, Any]) -> str:
+    """The per-turn context of an unattended scheduled turn.
+
+    The cached system prompt advertises skills, CLIs and the full tool
+    surface of a live conversation; a scheduled turn sees only its allowlist
+    and has nobody to ask. Say so ON the turn (never in the cached prefix),
+    naming the tools that exist, so the model neither reaches for ``run-skill``
+    nor ends with a question (BUG-212: the briefing tried the morning-routine
+    skill the prompt had advertised and died on "missing tool").
+    """
+    names = ", ".join(sorted(tools)) or "none"
+    block = (
+        "[Scheduled run — unattended] This turn runs on a schedule with no one "
+        f"listening. The only tools that exist in this turn are: {names}. Do not "
+        "call any other tool. If more than one listed tool can do the job, use "
+        "whichever is connected and returns data — do not stop because the first "
+        "name you tried is missing. Do not ask questions or request permission; "
+        "work with the tools listed and answer with the finished result."
+    )
+    return f"{turn_context}\n\n{block}" if turn_context else block
+
+
+def _short_provider_error(exc: Exception) -> str:
+    """One readable line for ``last_error`` / the fallback summary — the
+    exception class and the first 160 characters of its message."""
+    from jarvis.tasks.runner import readable_error
+
+    # The same code + human-message extraction the Runs tab uses, so a
+    # two-provider failure reads "openrouter: 402 — Insufficient credits…;
+    # gemini: 429 — You exceeded your current quota…" and not two dumped
+    # JSON bodies of which only the first survives the length cap.
+    return readable_error(exc)[:160]
+
+
+def _is_rate_limit_exc(exc: Exception) -> bool:
+    """Heuristic: 429 / rate_limit_error / status_code=429."""
+    msg = str(exc).lower()
+    if "429" in msg or "rate_limit" in msg or "rate-limit" in msg:
+        return True
+    if "rate limit" in msg or "too many requests" in msg:
+        return True
+    # Anthropic-SDK-RateLimitError
+    if type(exc).__name__ == "RateLimitError":
+        return True
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return True
+    return False
+
+
+# Leak-recovery fallback variants — see BrainManager._action_failed_phrase.
+_ACTION_FAILED_PHRASES: dict[str, str] = {
+    "de": (
+        "Ich habe die Aktion erkannt, "  # i18n-allow: spoken German TTS
+        "konnte sie aber nicht ausführen."  # i18n-allow: spoken German TTS
+    ),
+    "en": "I recognized the action but couldn't execute it.",
+    "es": "Reconocí la acción, pero no pude ejecutarla.",
+}
+
+# DIRECT local-action acknowledgement — see BrainManager._localize_direct_ack.
+# open_app hardcodes a German launch acknowledgement that the DIRECT fast path
+# surfaces VERBATIM (no LLM re-render), so its leading verb is translated to the
+# turn language here (live bug 2026-06-15: an English "open my explorer" turn was
+# acknowledged in German even with the English pin set). Only the verb prefix is
+# swapped — the suffix (the actual app / URL the tool reported) is preserved
+# untouched. The "de" entry MUST match open_app's literal prefix in
+# jarvis/plugins/tool/open_app.py; a mismatch degrades safely to passthrough
+# (the historical German string), never a crash.
+_OPEN_APP_ACK_PREFIX: dict[str, str] = {
+    "de": "Gestartet:",  # i18n-allow: spoken German TTS acknowledgement
+    "en": "Opened:",
+    "es": "Abierto:",
+}
+
+
+def _looks_german(text: str) -> bool:
+    """True when *text* is clearly German.
+
+    Delegates to the canonical ``detect_text_language`` (the single source of
+    truth the pipeline uses for the turn language) instead of a private
+    stop-word list. The old heuristic compared two tiny hint lists with
+    ``score_de >= score_en``, so any text with no recognised stop-word in
+    either list scored 0-0 and was declared German. A clean English sentence
+    ("Could you please tell me which city ... in Australia?") therefore tied to
+    German and was acknowledged / labelled German (live bug 2026-06-14). The
+    canonical detector returns ``"unknown"`` on ambiguity, so English, Spanish
+    and zero-signal text are now correctly NOT German.
+    """
+    return detect_text_language(text) == "de"
+
+
+def _is_missing_key_exc(msg: str) -> bool:
+    """Heuristic: provider reports a missing API key or invalid auth state."""
+    m = msg.lower()
+    return any(k in m for k in (
+        "kein grok-api-key", "kein gemini-api-key", "kein openai-api-key",
+        "kein anthropic-api-key", "kein claude-credential",
+        "kein openrouter-api-key", "kein xai-api-key",
+        "api_key not set", "api key not found",
+        "api_key is not set", "api key is not set",
+        "anthropic_api_key is not set", "openai_api_key is not set",
+        "gemini_api_key is not set", "xai_api_key is not set",
+        "api-key gefunden", "missing api key", "no api key",
+        "not configured",
+        "api-key nicht gesetzt", "apikey missing",
+        "not logged in", "please run /login", "credentials.json",
+        # Vertex AI's Google Cloud project path signs with Application Default
+        # Credentials; a host without a gcloud login or service account raises
+        # google-auth's DefaultCredentialsError ("Your default credentials were
+        # not found"). Live 2026-08-22 18:40/18:42: classified as call_fail,
+        # the keyless Tool Model led the chain on EVERY delegated voice turn and
+        # paid 7-10 s for the same miss before a working provider was tried.
+        "default credentials were not found", "defaultcredentialserror",
+        "application default credentials were not found",
+    ))
+
+
+def _is_account_blocked_exc(msg: str) -> bool:
+    """Heuristic: provider account has a terminal auth/quota/billing problem.
+    Examples observed live (all 2026-04-29):
+
+      - Anthropic 400: ``Your credit balance is too low to access the
+        Anthropic API. Please go to Plans & Billing.``
+      - xAI 404: ``The model grok-4.1-fast does not exist or your team
+        e6d8f57e-... does not have access to it.``
+      - OpenAI 403: ``The model `o1-pro` is not available on your tier.``
+      - Gemini 403: ``Quota exceeded for ...`` (unlike 429 — terminal).
+
+      - OpenRouter 403: ``Key limit exceeded (total limit).`` (a funded account
+        whose per-key spend cap is used up — live probe 2026-06-30, AP-22).
+
+    These providers are dead for the session (a simple retry won't help).
+    BrainManager pushes them immediately into _dead_providers and emits a
+    user-actionable setup message instead of "provider unreachable".
+    """
+    m = msg.lower()
+    # Billing / budget / quota wording is the SHARED canonical list (one source of
+    # truth with the test-badge classifier) — covers credit-balance, spend/key/total
+    # limit, insufficient_quota, depleted prepayment, out-of-credits, etc.
+    if any(k in m for k in BILLING_LIMIT_MARKERS):
+        return True
+    # Access / tier / subscription gates — terminal too, but not strictly "money".
+    return any(k in m for k in _ACCOUNT_ACCESS_MARKERS)
+
+
+# Terminal access/tier/subscription wordings (NOT money — kept beside the shared
+# billing markers so both flavours of "account blocked" live in one classifier).
+_ACCOUNT_ACCESS_MARKERS: tuple[str, ...] = (
+    "your team",                   # xAI "your team ... does not have access"
+    "team does not have access",
+    "team_does_not_have_access",
+    "not available on your tier",  # OpenAI tier gate
+    "subscription required",
+    "upgrade plan",
+    "upgrade your plan",
+    "billing required",
+    "billing not active",
+    "account is suspended",
+)
+
+
+def _http_status_code(msg: str) -> int | None:
+    """First 4xx/5xx HTTP status embedded in a provider error string, else None.
+
+    The SDK serializes the numeric code into ``str(exc)`` ("Error code: 403 - …"
+    for the OpenAI/Anthropic families; "403 … PERMISSION_DENIED" for Gemini), so a
+    code-first decision works uniformly without importing any provider SDK — the
+    same approach the test-badge classifier uses.
+    """
+    match = re.search(r"\b([45]\d\d)\b", msg)
+    return int(match.group(1)) if match else None
+
+
+# The chain loop dead-lists exactly these kinds: a terminal credential/account state
+# (no key stored, blocked/over-budget account, invalid key) must cross to another
+# available provider family for the rest of the session. A transient ``rate_limit``
+# is deliberately NOT here — it takes the 30s cooldown path and keeps the provider.
+_DEAD_LIST_KINDS: frozenset[str] = frozenset({"missing_key", "account_blocked", "bad_key"})
+
+
+# User-friendly labels per provider — what the user needs to do.
+def _is_invalid_model_exc(msg: str) -> bool:
+    """Heuristic: provider reports an unknown/invalid model ID.
+
+    Do NOT use when the error is more likely an account problem
+    (see `_is_account_blocked_exc`) — otherwise an account 404 would
+    incorrectly land as "config bug, fix jarvis.toml".
+    """
+    if _is_account_blocked_exc(msg):
+        return False
+    m = msg.lower()
+    return any(k in m for k in (
+        "model_not_found", "model not found", "model does not exist",
+        "unknown model", "invalid model", "invalid_model",
+        "not a valid model", "unsupported model",
+        # OpenAI's 404 for a Responses-API-only model called over
+        # Chat-Completions ("This is not a chat model and thus not supported
+        # in the v1/chat/completions endpoint"). Live 2026-08-06: spoken as
+        # "network or provider issue", which sent the user hunting API keys.
+        "not a chat model",
+    ))
+
+
+#: Tokens held back from a brain's context window before its tool surface is
+#: sized: the user's turn text, the per-turn context block, the plugin usage
+#: cards and the first answer or tool round. Only a local brain has a window
+#: small enough for this to matter — see ``_fit_tools_to_context_window``.
+_CONTEXT_FIT_RESERVE_TOKENS = 4096
+
+#: Chars per token for the size estimate. Deliberately low: tool schemas are
+#: JSON, which tokenizes denser than prose, and over-estimating costs a few
+#: tools on a 32k window while under-estimating costs the whole turn.
+_CONTEXT_FIT_CHARS_PER_TOKEN = 3
+
+
+def _approx_tokens(text: str) -> int:
+    """A conservative token estimate for ``text`` — no tokenizer needed."""
+    return len(text) // _CONTEXT_FIT_CHARS_PER_TOKEN + 1
+
+
+def _approx_history_tokens(history: Sequence[BrainMessage] | None) -> int:
+    """What the message log costs on the wire, by the same estimate."""
+    if not history:
+        return 0
+    total = 0
+    for msg in history:
+        content = getattr(msg, "content", "")
+        if isinstance(content, str):
+            total += _approx_tokens(content)
+            continue
+        try:
+            total += _approx_tokens(json.dumps(content, ensure_ascii=False, default=str))
+        except (TypeError, ValueError):
+            total += _approx_tokens(str(content))
+    return total
+
+
+def _tool_surface_tokens(name: str, tool: Any) -> int:
+    """What ONE tool costs on the wire: name, description and schema."""
+    description = getattr(tool, "description", "") or ""
+    schema = getattr(tool, "schema", None) or {}
+    try:
+        wire = json.dumps(
+            {"name": name, "description": description, "input_schema": schema},
+            ensure_ascii=False,
+            default=str,
+        )
+    except (TypeError, ValueError):
+        wire = f"{name} {description} {schema}"
+    return _approx_tokens(wire)
+
+
+def _fit_tools_to_context_window(
+    tools: dict[str, Tool],
+    *,
+    context_window: int,
+    used_tokens: int,
+    keep: Iterable[str] = (),
+    max_tools: int = 0,
+) -> tuple[dict[str, Tool], list[str]]:
+    """Shrink a tool surface until it fits ``context_window`` and ``max_tools``.
+
+    Returns ``(surviving tools, dropped names in drop order)``. A window or a
+    tool cap of ``0`` or less means the brain declared none. ``used_tokens``
+    is everything else the request carries (system prompt, history,
+    reserve); what remains is the budget for tools.
+
+    Drop order, deliberately: connected-server tools first — they are
+    additions to Jarvis's own surface, each one a full JSON schema, and on a
+    small window they are what does not fit (live 2026-08-27: 131 of 221
+    tools came from three MCP servers). Within a group the largest go first,
+    so as many hands as possible stay. Names in ``keep`` are never dropped.
+    When even the prompt alone exceeds the window every droppable tool goes
+    and the caller's log says so; the request still fails, but honestly.
+    """
+    if (context_window <= 0 and max_tools <= 0) or not tools:
+        return tools, []
+    costs = {name: _tool_surface_tokens(name, tool) for name, tool in tools.items()}
+    budget = context_window - used_tokens if context_window > 0 else sum(costs.values())
+    total = sum(costs.values())
+    count_cap = max_tools if max_tools > 0 else len(tools)
+    if total <= budget and len(tools) <= count_cap:
+        return tools, []
+    kept = set(keep)
+    droppable = [name for name in tools if name not in kept]
+    # A stable sort keeps the registry order inside each (group, size) tie.
+    droppable.sort(
+        key=lambda name: (
+            0 if getattr(tools[name], "is_mcp_tool", False) else 1,
+            -costs[name],
+        )
+    )
+    dropped: list[str] = []
+    remaining = len(tools)
+    for name in droppable:
+        if total <= budget and remaining <= count_cap:
+            break
+        total -= costs[name]
+        remaining -= 1
+        dropped.append(name)
+    gone = set(dropped)
+    return {name: tool for name, tool in tools.items() if name not in gone}, dropped
+
+
+#: Wordings with which providers refuse a request larger than the model's
+#: context window. Per request, never per credential — so NOT in
+#: ``_DEAD_LIST_KINDS`` and never a cooldown.
+_CONTEXT_OVERFLOW_MARKERS: tuple[str, ...] = (
+    "exceeds the available context size",  # llama.cpp / Ollama (live 2026-08-27)
+    "exceed_context_size",  # the same server's error type
+    "context_length_exceeded",  # OpenAI-compatible error code
+    "maximum context length",  # OpenAI / OpenRouter wording
+    "prompt is too long",  # Anthropic
+    "exceeds the maximum number of tokens",  # Gemini ("input token count …")
+)
+
+
+def _is_context_overflow_exc(msg: str) -> bool:
+    """True when the provider refused the request for its SIZE.
+
+    Until 2026-08-27 this fell through to the generic ``call_fail`` and the
+    user read "I can't reach my provider — check the network" for a request
+    the server had answered perfectly well, with a 400 that named the cause.
+    """
+    m = msg.lower()
+    return any(marker in m for marker in _CONTEXT_OVERFLOW_MARKERS)
+
+
+def _classify_provider_error(msg: str, *, default: str) -> str:
+    """Central classifier for provider error strings.
+
+    Order is intentional:
+      1. missing_key (auth/config — important for the dead-list).
+      2. account_blocked (credit/quota/tier/budget — also dead-list, by wording).
+      3. invalid_model (config bug — different action: fix jarvis.toml).
+      3b. context_overflow (the request is larger than the model's window —
+          per request, so neither dead-list nor cooldown; the spoken cause
+          names the size, not the network).
+      4. code-first terminal: a bare 401 -> bad_key, a bare 402 -> account_blocked
+         (dead-list; catches a live invalid key / Payment-Required that carries the
+         numeric code but no known wording).
+      5. rate_limit (transient — handled by its own cooldown path).
+      6. default (init_fail or call_fail — caller decides).
+
+    bad_key / account_blocked / missing_key all dead-list (``_DEAD_LIST_KINDS``)
+    so a terminal provider stops leading the chain; only rate_limit takes the
+    transient cooldown.
+
+    missing_key is checked before rate_limit so an auth error that happens to
+    contain "limit" (e.g. "exceeded the rate limit for this resource") is not
+    incorrectly classified as a 429 cooldown.
+    """
+    if _is_missing_key_exc(msg):
+        return "missing_key"
+    if _is_account_blocked_exc(msg):
+        return "account_blocked"
+    if _is_invalid_model_exc(msg):
+        return "invalid_model"
+    if _is_context_overflow_exc(msg):
+        return "context_overflow"
+    m = msg.lower()
+    # Code-first terminal fallback for a 401/402 that carries the numeric HTTP code
+    # but NONE of the known wordings (a bare live "Error code: 401 - invalid x-api-key"
+    # / "Error code: 402 - Payment Required"). A 401 = invalid/expired/wrong-account
+    # key, a 402 = Payment-Required — both terminal, so the provider is dead-listed and
+    # stops leading the chain every turn (live log 2026-06-30: claude-api 401 with no
+    # Anthropic account was retried on every turn). 403/429 stay word-driven on purpose:
+    # a transient Gemini 403 "CachedContent not found" must NOT dead-list (BUG-019).
+    code = _http_status_code(m)
+    if code == 401:
+        return "bad_key"
+    if code == 402:
+        return "account_blocked"
+    if any(s in m for s in ("429", "rate_limit", "rate-limit",
+                             "rate limit", "too many requests")):
+        return "rate_limit"
+    return default
+
+
+def _keyless_provider_is_rescued_by_oauth(provider_name: str) -> bool:
+    """True when a keyless provider must NOT be dead-listed at the pre-boot key
+    check because it authenticates via an OAuth login ON DISK, not an API key.
+
+    The subscription-CLI brains (codex over the ChatGPT login at ``~/.codex/auth.json``)
+    carry no entry in ``PROVIDER_SECRET_CANDIDATES``, so a ChatGPT-only user would
+    otherwise see ``codex`` pushed into ``_dead_providers`` → empty chain → every
+    chat AND voice turn bricks with the provider-down apology. The OAuth login IS a
+    usable credential. Open-source single-provider mandate (AP-22). Any import/probe
+    failure is treated as "not rescued" (fail-safe → dead-list).
+
+    Vertex AI is the second shape: its Google Cloud project path signs with
+    Application Default Credentials (a ``gcloud`` login, a service account,
+    workload identity), so a fully configured install stores no key in any of
+    the family's slots. The declarative ``KEYLESS_CREDENTIAL_PROBES`` table in
+    ``app_control`` is the ONE place that names the probe, and it is the same
+    answer every provider card and every switch already gives — so this check
+    can never dead-list a family the UI shows as configured. Live 2026-08-17:
+    the check knew only key slots, pushed ``vertex`` into ``_dead_providers``
+    at every boot, and the router silently ran on the AI Studio account (whose
+    prepaid credit was empty) while the user's Vertex project sat idle.
+    """
+    if provider_name == "codex":
+        try:
+            from jarvis.plugins.brain.codex import _codex_oauth_connected
+            return bool(_codex_oauth_connected())
+        except Exception:  # noqa: BLE001
+            return False
+    try:
+        from jarvis.brain.app_control import _keyless_credential_present
+
+        return bool(_keyless_credential_present(provider_name))
+    except Exception as exc:  # noqa: BLE001 — a failed probe is not a credential
+        log.debug("Keyless-credential rescue probe failed for %s: %s", provider_name, exc)
+        return False
+
+
+_PROVIDER_SETUP_HINTS: dict[str, str] = {
+    "gemini": "GEMINI_API_KEY setzen (Key via https://aistudio.google.com/apikey)",
+    "claude-api": "ANTHROPIC_API_KEY setzen",
+    "openai": "OPENAI_API_KEY setzen",
+    "openrouter": "OPENROUTER_API_KEY setzen",
+    "grok": "Set XAI_API_KEY (key from console.x.ai)",
+    "nvidia": "Set NVIDIA_API_KEY (nvapi- key from build.nvidia.com)",
+    "ollama-local": "Ollama-Server starten (localhost:11434)",
+    "ollama-cloud": "Ollama-Cloud-Token setzen",
+}
+
+
+def _format_provider_chain_error(
+    errors: list[tuple[str, str, str, str]],
+) -> str:
+    """Builds a meaningful user message from the per-provider error list.
+
+    Prioritises root causes: when the **primary** provider has no key,
+    THAT is the main message. Rate limits are listed as secondary.
+    """
+    if not errors:
+        return ("Keine Brain-Provider konfiguriert. "
+                "Setze mindestens GEMINI_API_KEY oder ANTHROPIC_API_KEY.")
+
+    missing_keys: list[str] = []
+    invalid_keys: list[str] = []
+    account_blocked: list[str] = []
+    vision_unsupported: list[str] = []
+    invalid_models: list[str] = []
+    context_overflow: list[str] = []
+    rate_limited: list[str] = []
+    empty_responses: list[str] = []
+    other_fails: list[str] = []
+    for prov_name, _model, kind, _detail in errors:
+        if kind == "missing_key":
+            missing_keys.append(prov_name)
+        elif kind == "bad_key":
+            invalid_keys.append(prov_name)
+        elif kind == "account_blocked":
+            account_blocked.append(prov_name)
+        elif kind == "vision_unsupported":
+            vision_unsupported.append(prov_name)
+        elif kind == "invalid_model":
+            invalid_models.append(prov_name)
+        elif kind == "context_overflow":
+            context_overflow.append(prov_name)
+        elif kind in ("rate_limit", "skipped_cooldown"):
+            rate_limited.append(prov_name)
+        elif kind == "empty_response":
+            empty_responses.append(prov_name)
+        else:
+            other_fails.append(prov_name)
+
+    # Deduplicate while preserving order (first-listed priority).
+    def _uniq(xs: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for x in xs:
+            if x not in seen:
+                out.append(x)
+                seen.add(x)
+        return out
+
+    missing_keys = _uniq(missing_keys)
+    invalid_keys = _uniq(invalid_keys)
+    account_blocked = _uniq(account_blocked)
+    vision_unsupported = _uniq(vision_unsupported)
+    invalid_models = _uniq(invalid_models)
+    context_overflow = _uniq(context_overflow)
+    rate_limited = _uniq(rate_limited)
+    empty_responses = _uniq(empty_responses)
+    other_fails = _uniq(other_fails)
+
+    parts: list[str] = []
+    # 1. Setup hint for the most important missing keys (max 2).
+    # Priority: Sidebar → API Keys is the easiest setup path for non-coders.
+    # Specific ENV/CLI hints for power users come after.
+    if missing_keys:
+        hints = [
+            _PROVIDER_SETUP_HINTS.get(p, f"{p}: Setup pruefen")
+            for p in missing_keys[:2]
+        ]
+        parts.append(
+            "Kein Brain-Key gefunden. Sidebar -> API-Keys oeffnen und "
+            f"einen Key setzen ({' oder '.join(hints)})."
+        )
+    # 1b. Invalid/expired key (a 401 — the stored key is rejected, not absent).
+    if invalid_keys:
+        parts.append(
+            f"Key abgelehnt bei {', '.join(invalid_keys)} (ungueltig oder abgelaufen). "
+            "Sidebar -> API-Keys: Key ersetzen."
+        )
+    # 2. Account block (credit/quota/tier) — user must take action
+    if account_blocked:
+        parts.append(
+            f"Account-Problem bei {', '.join(account_blocked)}: "
+            "Credit aufladen, Plan upgraden oder Modell-Tier freischalten. "
+            "Bei Anthropic: console.anthropic.com/settings/billing. "
+            "Bei xAI: console.x.ai/team/billing."
+        )
+    if vision_unsupported:
+        parts.append(
+            f"Kein Bildverstehen bei {', '.join(vision_unsupported)} — "  # i18n-allow
+            "der Key ist da, aber das Modell sieht keine Bilder. "  # i18n-allow
+            "Unter API-Keys einen Anbieter mit Bildverarbeitung aktivieren."  # i18n-allow
+        )
+    if invalid_models:
+        parts.append(
+            f"Ungueltige Model-ID bei {', '.join(invalid_models)}. "
+            "jarvis.toml und TIER_DEFAULTS_BY_PROVIDER pruefen."
+        )
+    # 1c. The request was larger than the model's context window — a size
+    # problem of THIS request, not a network one (live 2026-08-27: a 32k
+    # local model, 221 tools, "check the network").
+    if context_overflow:
+        parts.append(
+            f"Anfrage zu gross fuer das Kontextfenster von {', '.join(context_overflow)}. "
+            "Modell mit groesserem Kontext waehlen, verbundene MCP-Server "
+            "reduzieren oder einen neuen Chat starten."
+        )
+    # 2. Rate limits are listed as supplementary info
+    if rate_limited:
+        prefix = "Ausserdem rate" if parts else "Rate"
+        parts.append(
+            f"{prefix}-limited: {', '.join(rate_limited)}. "
+            "Einen Moment abwarten oder auf anderen Provider wechseln."
+        )
+    # 3. Empty responses (safety block) — separate user-actionable case
+    if empty_responses and not missing_keys and not invalid_models:
+        parts.append(
+            f"Provider {', '.join(empty_responses)} hat leer geantwortet "
+            "(vermutlich Safety-Filter). Anders formulieren oder anderen "
+            "Provider per UI aktivieren."
+        )
+    # 4. Other failures only mentioned when there is no clear root cause
+    if (not missing_keys and not invalid_models and not context_overflow
+            and not rate_limited and not empty_responses and other_fails):
+        parts.append(
+            f"Provider {', '.join(other_fails)} unerreichbar. "
+            "Netzwerk pruefen."
+        )
+    return " ".join(parts)
