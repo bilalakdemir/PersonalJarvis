@@ -297,3 +297,28 @@ def test_failed_harness_groups_with_running_dispatch_context() -> None:
         "tool:dispatch",
         "harness:shot",
     ]
+
+
+
+def test_terminal_request_context_reaches_incident_without_poll_cache() -> None:
+    row = {
+        "activity_id": "tool:trace:dispatch_to_harness",
+        "kind": "tool",
+        "label": "dispatch_to_harness",
+        "status": "failed",
+        "trace_id": "trace",
+        "request_detail": (
+            "{'harness': 'screenshot', 'prompt': "
+            "'Open Brave and go to https://example.com'}"
+        ),
+        "rationale": "desktop path was selected",
+        "detail": "exit 3",
+    }
+
+    enriched = self_engineering._enrich_failures([row], {})
+    context = self_engineering._incident_context(enriched)
+
+    assert "Open Brave" in context
+    assert "https://example.com" in context
+    assert "desktop path was selected" in context
+    assert "exit 3" in context
