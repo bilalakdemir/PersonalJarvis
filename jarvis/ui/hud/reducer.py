@@ -753,7 +753,18 @@ class HudReducer:
         closed = self._ops.close(f"harness:{_trace(event)}:{harness}", ts)
         if closed is None:
             return False
-        self._remember_output(closed, ts, status="completed")
+        result = event.result
+        exit_code = int(getattr(result, "exit_code", 0) or 0) if result is not None else 0
+        if exit_code == 130:
+            status = "cancelled"
+        elif exit_code == 0:
+            status = "completed"
+        else:
+            status = "failed"
+        detail = ""
+        if result is not None:
+            detail = getattr(result, "stderr", "") or getattr(result, "stdout", "")
+        self._remember_output(closed, ts, status=status, detail=detail)
         return True
 
     # -------------------------------------------------------------- tasks
@@ -1798,20 +1809,3 @@ class HudReducer:
             if approval.expires_at_ns and approval.expires_at_ns <= now_ns:
                 self._approvals.pop(approval_id, None)
                 for idx_key, idx_val in list(self._tool_approval_index.items()):
-                    if idx_val == approval_id:
-                        self._tool_approval_index.pop(idx_key, None)
-        for key in self._ops.keys():
-            record = self._ops.get(key)
-            if record is None:
-                continue
-            ttl = STALE_AFTER_NS.get(record.kind)
-            if ttl is not None and now_ns - record.updated_at_ns > ttl:
-                self._ops.force_close(key)
-
-
-__all__ = [
-    "HudReducer",
-    "register_memory_mapper",
-    "registered_memory_mappers",
-    "unregister_memory_mapper",
-]
