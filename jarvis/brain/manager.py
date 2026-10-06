@@ -9208,7 +9208,7 @@ class BrainManager:
         # local launcher for bare desktop app opens, but do NOT consume a URL
         # navigation/search by launching the user's desktop browser: let the
         # router call society_browser so the work stays in Jarvis' own profile.
-        if plan.mode == LocalActionMode.DIRECT and "society_browser" in self._tools:
+        if plan.mode == LocalActionMode.DIRECT and "society_browser" in getattr(self, "_tools", {}):
             for call in plan.tool_calls:
                 if call.name != "open_app":
                     continue
@@ -11998,21 +11998,3 @@ class BrainManager:
         _drop_in_hist = sum(
             1 for m in history
             if isinstance(getattr(m, "content", None), str)
-            and "\U0001F4CE" in m.content
-        )
-        if _drop_in_hist:
-            log.info(
-                "📎 DROP CONTEXT present in this turn's history: %d note(s), "
-                "use_history=%s, total history=%d",
-                _drop_in_hist, use_history, len(history),
-            )
-        last_exc: Exception | None = None
-        response_text = ""
-        used_provider: str | None = None
-        used_model: str | None = None
-        _turn_executed: set[str] = set()  # tools that REALLY ran this turn
-        # AI Pointer (deictic push): launch the cursor-element resolution BEFORE
-        # the vision-image await so it overlaps with it instead of running serially
-        # after (AP-9: keep the deictic turn off the serial hot path). The task does
-        # the regex gate itself, so non-deictic turns complete instantly with
-        # ("", None) and fast-skip on a headless host. Awaited just below.
