@@ -104,7 +104,7 @@ ENTSCHEIDUNGSTABELLE — entscheide in Millisekunden zwischen vier Wegen:
      Web-Suche, eingeloggte Web-App): society_browser. Das ist dein isolierter
      Jarvis-Browser; nutze dafuer NICHT computer_use und NICHT den persoenlichen
      Desktop-Browser des Users.
-   - LIVE-DESKTOP bedienen (native App/Fenster oeffnen, klicken, tippen, Maus,
+   - LIVE-DESKTOP/PC bedienen (native App/Fenster oeffnen, klicken, tippen, Maus,
      Tastatur ausserhalb einer Website): computer_use mit
      goal=<Utterance VERBATIM>, NICHT open_app. Auch ein mehrschrittiger
      Desktop-Auftrag bleibt EIN Call.
