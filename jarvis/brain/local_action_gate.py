@@ -428,8 +428,9 @@ _OPEN_INSTRUCTIONAL_RE = re.compile(
 # whitelists http(s):// targets and forwards ``arguments``. Without this
 # branch the compound regex routed the goal into the vision-LLM loop, which
 # took ~3 minutes live (log 2026-06-10 20:46) for what is a 1-second launch.
-# Both regexes are end-anchored: a site followed by MORE work ("… und poste
-# einen tweet") must keep the computer-use loop, which has to act on the page.
+# The plain launch regexes are end-anchored. A site followed by MORE website
+# work is detected separately and handed back to the router so society_browser
+# owns the page instead of the desktop screenshot loop.
 # ---------------------------------------------------------------------------
 _BROWSER_TOKENS = (
     "chrome", "firefox", "edge", "brave", "opera", "safari", "chromium",
