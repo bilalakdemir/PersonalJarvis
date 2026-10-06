@@ -390,6 +390,22 @@ Never edit governance files, jarvis.toml, credentials, secrets or user data. Nev
 Finish with OUTCOME: FIXED | NO_CODE_CHANGE | NEEDS_HUMAN.
 """
 
+def _change_fingerprint(worktree: Path, paths: Iterable[str]) -> str:
+    """Hash the actual changed file bytes so same-path revisions are detected."""
+    digest = hashlib.sha256()
+    for rel in sorted(str(path) for path in paths):
+        digest.update(rel.encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+        target = worktree / rel
+        if target.is_file():
+            digest.update(target.read_bytes())
+        else:
+            digest.update(b"<missing>")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+
 def _repair_rework_prompt(context: str, verifier_output: str) -> str:
     return f"""Read AGENTS.md first. Revise the existing AERION repair in this isolated worktree.
 An independent READ-ONLY verifier rejected the current patch.
@@ -513,6 +529,7 @@ def _incident(
             "activities": activity_ids,
         }
     if decision == "FAIL":
+        before_rework = _change_fingerprint(worktree, changed)
         rework = _codex(
             worktree, _repair_rework_prompt(context, raw), "workspace-write"
         )
@@ -527,7 +544,8 @@ def _incident(
             }
 
         revised = _changed(worktree)
-        if revised == changed:
+        after_rework = _change_fingerprint(worktree, revised)
+        if revised == changed and after_rework == before_rework:
             return {
                 "status": "needs_human",
                 "branch": branch,
