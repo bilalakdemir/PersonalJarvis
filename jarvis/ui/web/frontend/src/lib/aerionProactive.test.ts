@@ -88,6 +88,8 @@ function activity(overrides: Partial<HudActivity> = {}): HudActivity {
     worker_id: null,
     run_id: null,
     detail: "",
+    request_detail: "",
+    rationale: "",
     started_at_ns: 1,
     updated_at_ns: 2,
     ...overrides,

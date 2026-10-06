@@ -41,8 +41,8 @@ SECRET = re.compile(r"(?i)\b(?:nvapi-|sk-|gh[pousr]_)[A-Za-z0-9_-]{8,}|\bBearer\
 INCIDENT_WINDOW_NS = 30 * 1_000_000_000
 _INCIDENT_FIELDS = (
     "activity_id", "kind", "label", "status", "trace_id", "project_id",
-    "mission_id", "task_id", "worker_id", "run_id", "request_detail", "detail",
-    "started_at_ns", "updated_at_ns",
+    "mission_id", "task_id", "worker_id", "run_id", "request_detail", "rationale",
+    "detail", "started_at_ns", "updated_at_ns",
 )
 
 
@@ -115,7 +115,7 @@ def _enrich_failures(
     for row in rows:
         current = dict(row)
         prior = cache.get(str(current.get("activity_id") or ""))
-        if prior:
+        if prior and not str(current.get("request_detail") or "").strip():
             request_detail = str(prior.get("detail") or "").strip()
             if request_detail and request_detail != str(current.get("detail") or "").strip():
                 current["request_detail"] = request_detail

@@ -632,6 +632,8 @@ class HudReducer:
                 label=tool,
                 trace_id=trace,
                 detail=_safe(event.args),
+                request_detail=_safe(event.args),
+                rationale=_safe(event.rationale),
                 started_at_ns=ts,
                 updated_at_ns=ts,
             ),

@@ -280,6 +280,8 @@ describe("HudView", () => {
             worker_id: null,
             run_id: null,
             detail: "report.md created",
+            request_detail: "",
+            rationale: "",
             started_at_ns: 1_000_000,
             updated_at_ns: 2_000_000,
           },

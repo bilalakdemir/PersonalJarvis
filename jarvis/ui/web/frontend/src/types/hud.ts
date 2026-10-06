@@ -84,6 +84,8 @@ export interface HudActivity {
   worker_id: string | null;
   run_id: string | null;
   detail: string;
+  request_detail: string;
+  rationale: string;
   started_at_ns: number;
   updated_at_ns: number;
 }

@@ -134,8 +134,14 @@ class HudActivity:
     task_id: str | None = None
     worker_id: str | None = None
     run_id: str | None = None
-    #: Safe, capped one-line summary (redacted tool/action summary).
+    #: Safe, capped one-line terminal/live summary.
     detail: str = ""
+    #: Safe, capped context captured when the operation started. Unlike detail,
+    #: this survives terminal replacement so incident diagnosis can distinguish
+    #: the requested action from its downstream failure.
+    request_detail: str = ""
+    #: Safe, capped decision rationale when the producer supplied one.
+    rationale: str = ""
     started_at_ns: int = 0
     updated_at_ns: int = 0
 
