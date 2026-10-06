@@ -112,6 +112,24 @@ async def test_classic_aerion_url_navigation_stands_down_for_isolated_browser(
 
 
 @pytest.mark.asyncio
+async def test_classic_aerion_website_readback_stands_down_to_isolated_browser(
+    monkeypatch,
+) -> None:
+    manager = _make_direct_manager(reply_language="en")
+    manager._tools = {"society_browser": object()}
+    monkeypatch.setattr(
+        "jarvis.brain.local_action_gate._get_capability_registry", lambda: None
+    )
+
+    result = await manager._run_local_action_fast_path(
+        "Open Brave and go to https://example.com. Tell me the page title."
+    )
+
+    assert result is None
+    assert manager._tool_executor.called_with is None
+
+
+@pytest.mark.asyncio
 async def test_english_pin_acknowledges_in_english(monkeypatch) -> None:
     # Desktop "Languages" view set to English (brain.reply_language="en").
     mgr = _make_direct_manager(reply_language="en")
