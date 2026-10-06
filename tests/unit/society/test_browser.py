@@ -72,6 +72,10 @@ def test_llm_mapping_with_explicit_keys():
     assert spec.cls == "ChatAnthropic" and spec.model == "claude-x" and spec.api_key == "sk-ant"
     grok = llm_spec_for("grok", secret=lambda p: "xai")
     assert grok.cls == "ChatOpenAI" and grok.base_url and "x.ai" in grok.base_url
+    nvidia = llm_spec_for("nvidia", secret=lambda p: "nvapi-test")
+    assert nvidia.cls == "ChatOpenAI"
+    assert nvidia.model == "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+    assert nvidia.base_url == "https://integrate.api.nvidia.com/v1"
     ollama = llm_spec_for("ollama", "qwen3:8b", secret=lambda p: None)
     assert ollama.cls == "ChatOllama" and ollama.api_key is None
     assert "api_key" not in ollama.to_request()
