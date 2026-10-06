@@ -8,12 +8,15 @@ the society runtime during app boot or duplicating browser execution.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
 from jarvis.core.protocols import ToolResult
 
 RuntimeResolver = Callable[[], Any | None]
+
+log = logging.getLogger(__name__)
 
 
 class LeadSocietyBrowserTool:
@@ -85,6 +88,7 @@ class LeadSocietyBrowserTool:
             return (provider, model) if model else None
         except Exception:
             # BrowserTool can resolve the lead's configured model itself.
+            log.debug("isolated browser model-pick probe failed", exc_info=True)
             return None
 
     async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:
