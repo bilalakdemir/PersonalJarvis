@@ -40,6 +40,10 @@ _OVERLOADED = (
     "Spikes in demand are usually temporary. Please try again later.\",\\n "
     "\"status\": \"UNAVAILABLE\"\\n }\\n}\\n', 'status': 'Service Unavailable'}"
 )
+_NVIDIA_WORKER_SATURATION = (
+    "ResourceExhausted: Worker local total request limit reached (16/16)"
+)
+
 _NO_CREDITS = (
     "Error code: 429 - {'error': {'message': 'You have no credits remaining. "
     "Add credits to continue using the API.', 'type': 'insufficient_quota', "
@@ -139,6 +143,22 @@ async def test_overloaded_provider_gets_one_in_place_retry() -> None:
     assert reply.text == _COMPLETE
     assert len(alpha.requests) == 2
     assert not beta.requests  # never reached
+
+
+async def test_nvidia_worker_saturation_gets_one_in_place_retry() -> None:
+    alpha = _ScriptedBrain([
+        RuntimeError(_NVIDIA_WORKER_SATURATION),
+        (_COMPLETE, "stop"),
+    ])
+    beta = _ScriptedBrain([RuntimeError(_NO_CREDITS)])
+    manager = _FakeManager({"alpha": alpha, "beta": beta})
+
+    reply = await _call(manager)
+
+    assert reply.provider == "alpha"
+    assert reply.text == _COMPLETE
+    assert len(alpha.requests) == 2
+    assert not beta.requests
 
 
 async def test_persistent_outage_still_falls_through_to_the_next_provider() -> None:

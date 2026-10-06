@@ -27,6 +27,7 @@ _TRANSIENT_MARKERS: tuple[str, ...] = (
     "unavailable",
     "overloaded",
     "high demand",
+    "worker local total request limit reached",
     "try again later",
     "temporarily",
     "internal server error",
