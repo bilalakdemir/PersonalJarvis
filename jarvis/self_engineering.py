@@ -247,6 +247,26 @@ def _incident(repo: Path, data: Path, row: dict[str, Any], auto_merge: bool) -> 
             "auto_merge": merged, "changed": changed}
 
 
+def _acquire_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+b")
+    if path.stat().st_size == 0:
+        handle.write(b"0")
+        handle.flush()
+    handle.seek(0)
+    try:
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--repo-root", default=str(Path.cwd()))
@@ -258,6 +278,9 @@ def main(argv: list[str] | None = None) -> int:
     repo, data = Path(args.repo_root).resolve(), Path(args.data_dir).resolve()
     eng = data / "engineering"; eng.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(filename=eng / "supervisor.log", level=logging.INFO, encoding="utf-8")
+    lock = _acquire_lock(eng / "supervisor.lock")
+    if lock is None:
+        return 0
     state_path = eng / "state.json"; state = _state(state_path)
     url = f"http://127.0.0.1:{_port(repo)}/api/hud/snapshot"
     while True:
