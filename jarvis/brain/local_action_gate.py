@@ -448,6 +448,27 @@ _OPEN_BROWSER_GOTO_RE = re.compile(
     + _GOTO_VERBS + r"\s+" + _SITE_PATTERN + r"\s*[.!?]?\s*$",
     re.IGNORECASE,
 )
+_OPEN_BROWSER_GOTO_WEB_TASK_RE = re.compile(
+    r"^(?:hey\s+)?(?:jarvis[,\s]+)?(?:oeffne|starte|open|start|launch)\b[^.!?]*?"
+    r"\b(?P<app>" + "|".join(_BROWSER_TOKENS) + r")\b.*?\b"
+    + _GOTO_VERBS + r"\s+" + _SITE_PATTERN + r"(?P<followup>.+?)\s*$",
+    re.IGNORECASE,
+)
+# Website work must stay on the isolated society browser surface, not the
+# screenshot/desktop Computer-Use loop. This matcher is intentionally limited
+# to a browser + concrete site + an unmistakable page/web follow-up. Native
+# desktop follow-ups continue through the normal desktop-control classifier.
+_WEB_TASK_FOLLOWUP_RE = re.compile(
+    r"\b(?:"
+    r"tell\s+me|show\s+me|what(?:'s|\s+is)|read|summari[sz]e|extract|"
+    r"find\b.*\b(?:page|site)|click|press|select|fill|type|enter|"
+    r"log\s*in|login|sign\s*in|submit|scroll|post|publish|tweet|"
+    r"sag\s+mir|zeig(?:e)?\s+mir|was\s+ist|lies|fass\w*\s+zusammen|"
+    r"klick|drueck|waehl|fuell|tipp|einloggen|anmeld|absend|scrolle|poste"
+    r")\b",
+    re.IGNORECASE,
+)
+
 _BARE_GOTO_RE = re.compile(
     r"^(?:hey\s+)?(?:jarvis[,\s]+)?" + _GOTO_VERBS + r"\s+" + _SITE_PATTERN
     + r"\s*[.!?]?\s*$",
@@ -526,6 +547,24 @@ def _query_has_followup_action(query: str) -> bool:
     ("katzen und hunde", "how to click a button") is never caught. Pure regex,
     no IO (AP-9 / AP-11)."""
     return bool(_QUERY_FOLLOWUP_ACTION_RE.search(query))
+
+
+def _matches_browser_web_task(normalized: str) -> bool:
+    """Return True when a browser+URL command includes work on that website.
+
+    Such turns belong to the router-visible society_browser tool. Returning
+    control to the router keeps website/web-app work inside Jarvis' isolated
+    managed browser instead of driving the user's desktop through screenshots.
+    """
+
+    if _OPEN_NEGATION_RE.search(normalized) or _OPEN_INSTRUCTIONAL_RE.search(normalized):
+        return False
+    match = _OPEN_BROWSER_GOTO_WEB_TASK_RE.match(normalized)
+    if match is None:
+        return False
+    followup = str(match.group("followup") or "").strip(" \t\r\n.!?,;:-")
+    followup = re.sub(r"^(?:and|und|then|dann)\b\s*", "", followup, flags=re.IGNORECASE)
+    return bool(_WEB_TASK_FOLLOWUP_RE.search(followup))
 
 
 def _match_browser_url_fast_path(normalized: str) -> LocalActionPlan | None:
@@ -987,6 +1026,14 @@ def match_local_action(
     browser_url = _match_browser_url_fast_path(normalized)
     if browser_url is not None:
         return browser_url
+
+    # A concrete website plus further work on that page is not native desktop
+    # control. Stand down from the local fast path so the router can select the
+    # isolated society_browser tool. Without this guard the broad compound-open
+    # matcher below sent "Open Brave ... tell me the page title" into screenshot
+    # Computer-Use and stalled on desktop clicks.
+    if _matches_browser_web_task(normalized):
+        return None
 
     if _matches_visual_target(normalized):
         return LocalActionPlan(
