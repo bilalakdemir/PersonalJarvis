@@ -96,16 +96,10 @@ class LeadSocietyBrowserTool:
             runtime = self._resolve()
             if runtime is None:
                 return ToolResult(success=False, output=None, error="browser runtime unavailable")
-            prepare = getattr(runtime, "prepare_context", None)
-            if callable(prepare):
-                if not await prepare():
-                    return ToolResult(
-                        success=False,
-                        output=None,
-                        error="browser runtime unavailable",
-                    )
-            else:
-                await runtime.ensure_started()
+            # This is an explicit tool action, not passive first-turn context:
+            # wait for the lazy runtime to be ready instead of giving up after
+            # prepare_context()'s deliberately tiny conversation-latency budget.
+            await runtime.ensure_started()
 
             from jarvis.society.browser.tool import BrowserTool
 
