@@ -270,3 +270,30 @@ def test_active_operation_context_survives_terminal_failure() -> None:
     context = self_engineering._incident_context(enriched)
     assert "request_detail" in context
     assert "Open Brave and go to https://example.com" in context
+
+
+
+def test_failed_harness_groups_with_running_dispatch_context() -> None:
+    base = 5_000_000_000
+    screenshot = {
+        "activity_id": "harness:shot",
+        "kind": "harness",
+        "label": "screenshot",
+        "status": "failed",
+        "updated_at_ns": base + 1_000_000_000,
+    }
+    dispatch = {
+        "activity_id": "tool:dispatch",
+        "kind": "tool",
+        "label": "dispatch_to_harness",
+        "status": "running",
+        "detail": "Open Brave and go to https://example.com",
+        "updated_at_ns": base,
+    }
+
+    grouped = self_engineering.related_failures(screenshot, [screenshot, dispatch])
+
+    assert [row["activity_id"] for row in grouped] == [
+        "tool:dispatch",
+        "harness:shot",
+    ]
