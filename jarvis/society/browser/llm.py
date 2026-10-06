@@ -49,6 +49,12 @@ _MAP: Final[dict[str, tuple[str, str, str | None, bool]]] = {
     "groq": ("ChatGroq", "llama-3.3-70b-versatile", None, True),
     "openrouter": ("ChatOpenRouter", "openai/gpt-5", None, True),
     "grok": ("ChatOpenAI", "grok-4", "https://api.x.ai/v1", True),
+    "nvidia": (
+        "ChatOpenAI",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        "https://integrate.api.nvidia.com/v1",
+        True,
+    ),
     "ollama": ("ChatOllama", "llama3.1:8b", None, False),
     "local-openai": ("ChatOpenAI", "", "http://127.0.0.1:8080/v1", False),
 }
