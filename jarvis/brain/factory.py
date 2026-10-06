@@ -623,6 +623,22 @@ def _load_tools_for_tier(
         except Exception as exc:  # noqa: BLE001
             log.debug("Tool %s not loadable: %s", ep.name, exc)
 
+    # Editable installs cache entry-point metadata in dist-info. A checkout that
+    # gains the new society-browser entry point can therefore run the updated
+    # source before pip has refreshed that metadata. Keep AERION functional in
+    # that exact upgrade window by attaching the same lazy wrapper directly.
+    if tier == "router" and "society_browser" not in tools:
+        try:
+            from jarvis.plugins.tool.society_browser import LeadSocietyBrowserTool
+
+            register_tool(
+                LeadSocietyBrowserTool(runtime_resolver=_resolve_society_runtime),
+                source="builtin:society-browser-fallback",
+                virtual=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Built-in society browser fallback not loadable: %s", exc)
+
     # Phase 7.3 — self-mod tools are not discoverable via entry_points
     # (they require a shared state writer + PendingMutationStore). Plan-§AD-2:
     # router tier only; Sub-Jarvis does NOT receive them.
@@ -1998,11 +2014,3 @@ def _build_spawn_fallback(ack_cfg: Any) -> tuple[Any, Any]:
                 fb_name,
                 sorted(REGISTRY.keys()),
             )
-            return None, None
-        fb_provider = provider_cls(getattr(ack_cfg.providers, fb_name))
-        fb_breaker = CircuitBreaker(
-            threshold=ack_cfg.circuit_breaker_threshold,
-            cooldown_s=ack_cfg.circuit_breaker_cooldown_s,
-        )
-        log.info("Spawn-Announcer: failover wired (provider=%s).", fb_name)
-        return fb_provider, fb_breaker
