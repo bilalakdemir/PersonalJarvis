@@ -97,6 +97,16 @@ def test_nvidia_text_only_router_model_swaps_to_omni_without_cache(
     assert _speed_tune_chain([("nvidia", super_id)]) == [("nvidia", omni_id)]
 
 
+def test_nvidia_provider_default_swaps_to_omni_without_cache(
+    monkeypatch, tmp_path,
+) -> None:
+    """Matches the live CU trace where NVIDIA entered the chain as nvidia(None)."""
+    monkeypatch.setattr(cfg, "DATA_DIR", tmp_path)
+    omni_id = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+
+    assert _speed_tune_chain([("nvidia", None)]) == [("nvidia", omni_id)]
+
+
 # ---------------------------------------------------------------------------
 # CU chain rescue
 # ---------------------------------------------------------------------------
