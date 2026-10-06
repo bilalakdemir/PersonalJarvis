@@ -232,3 +232,41 @@ def test_no_change_rejection_gets_one_bounded_recheck(
     assert calls[2][0] == "workspace-write"
     assert calls[3][0] == "read-only"
     assert "prior pass made no code changes" in calls[2][1]
+
+
+
+def test_active_operation_context_survives_terminal_failure() -> None:
+    cache: dict[str, dict] = {}
+    self_engineering._capture_active_context(
+        {
+            "active_operations": [
+                {
+                    "activity_id": "tool:dispatch",
+                    "kind": "tool",
+                    "label": "dispatch_to_harness",
+                    "detail": "Open Brave and go to https://example.com",
+                    "trace_id": "trace-dispatch",
+                }
+            ]
+        },
+        cache,
+    )
+
+    enriched = self_engineering._enrich_failures(
+        [
+            {
+                "activity_id": "tool:dispatch",
+                "kind": "tool",
+                "label": "dispatch_to_harness",
+                "status": "failed",
+                "detail": "exit 1",
+                "trace_id": "trace-dispatch",
+            }
+        ],
+        cache,
+    )
+
+    assert enriched[0]["request_detail"] == "Open Brave and go to https://example.com"
+    context = self_engineering._incident_context(enriched)
+    assert "request_detail" in context
+    assert "Open Brave and go to https://example.com" in context
