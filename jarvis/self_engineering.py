@@ -602,7 +602,8 @@ def main(argv: list[str] | None = None) -> int:
                 aid = str(row["activity_id"])
                 if aid in seen:
                     continue
-                group = related_failures(row, rows)
+                candidates = [*rows, *active_context.values()]
+                group = related_failures(row, candidates)
                 group_ids = {str(item["activity_id"]) for item in group}
                 seen.update(group_ids)
                 state["seen"] = sorted(seen)[-500:]
