@@ -107,8 +107,8 @@ def _port(repo: Path) -> int:
             value = data.get("ui", {}).get("admin_api_port")
             if isinstance(value, int) and not isinstance(value, bool):
                 base = value
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as exc:
+            LOG.debug("self-engineering config port fallback: %s", exc)
     return base + 100
 
 
@@ -117,7 +117,7 @@ def _snapshot(url: str) -> dict[str, Any] | None:
         with urllib.request.urlopen(url, timeout=2) as response:  # noqa: S310 - loopback only
             value = json.loads(response.read().decode())
             return value if isinstance(value, dict) else None
-    except (OSError, ValueError):
+    except (OSError, ValueError):  # Dev server may still be booting; the poll loop retries.
         return None
 
 
@@ -125,7 +125,8 @@ def _state(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         return value if isinstance(value, dict) else {}
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        LOG.warning("self-engineering state reset after unreadable state: %s", exc)
         return {"bootstrapped": False, "seen": []}
 
 
@@ -273,7 +274,7 @@ def _acquire_lock(path: Path):
         else:
             import fcntl
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    except OSError:  # Another supervisor owns the lock; duplicate launch is a clean no-op.
         handle.close()
         return None
     return handle
