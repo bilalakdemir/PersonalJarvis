@@ -1018,6 +1018,7 @@ def _known_input_modalities(provider: str, model_id: str) -> tuple[str, ...] | N
         ((provider or "").strip().lower(), (model_id or "").strip().lower())
     )
 
+
 def _supported_parameters(entry: dict) -> tuple[str, ...] | None:
     """OpenRouter's top-level ``supported_parameters`` (includes ``"tools"`` when
     the model can tool-call) or None when the endpoint doesn't expose it."""
@@ -1061,6 +1062,7 @@ def model_capabilities(provider: str, model_id: str) -> dict[str, bool | None]:
         "tools": None,
     }
 
+
 def pick_vision_model(provider: str) -> str | None:
     """The best vision-capable brain model of provider, including known hints."""
     from jarvis.core import config as _cfg  # noqa: PLC0415
@@ -1103,6 +1105,7 @@ def pick_vision_model(provider: str) -> str | None:
 
     usable = sort_models(provider, filter_brain_models(candidates))
     return usable[0].id if usable else None
+
 
 #: Name markers of the FAST model class (low-latency siblings). Computer-Use
 #: issues one vision call per step, so step latency — not peak intelligence —
@@ -1200,6 +1203,7 @@ def pick_fast_vision_model(provider: str) -> str | None:
         if _family_rank(m.id) > 0 and is_fast_class_model(m.id):
             return m.id
     return usable[0].id
+
 
 def _output_modalities(entry: dict) -> tuple[str, ...] | None:
     """Pull ``architecture.output_modalities`` from a model entry as a tuple.
