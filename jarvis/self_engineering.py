@@ -115,7 +115,7 @@ def _enrich_failures(
     for row in rows:
         current = dict(row)
         prior = cache.get(str(current.get("activity_id") or ""))
-        if prior:
+        if prior and not str(current.get("request_detail") or "").strip():
             request_detail = str(prior.get("detail") or "").strip()
             if request_detail and request_detail != str(current.get("detail") or "").strip():
                 current["request_detail"] = request_detail
