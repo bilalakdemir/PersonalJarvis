@@ -23,6 +23,8 @@ from jarvis.core.events import (
     CUControlStarted,
     CUStepProfiled,
     ErrorOccurred,
+    HarnessCompleted,
+    HarnessDispatched,
     JarvisAgentTaskCompleted,
     JarvisAgentTaskStarted,
     MemoryUpdated,
@@ -48,6 +50,7 @@ from jarvis.core.memory_events import (
     TemporaryMemoryExpired,
     TemporaryMemoryStored,
 )
+from jarvis.core.protocols import HarnessResult
 from jarvis.core.project_state_events import (
     CurrentTaskChanged,
     ProjectContextResolutionChanged,
@@ -206,6 +209,48 @@ def test_completed_operation_moves_to_recent_outputs_with_real_result_preview() 
         "completed",
         "report.md created",
     )
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "stderr", "expected"),
+    [
+        (0, "", "completed"),
+        (1, "boom", "failed"),
+        (130, "cancelled", "cancelled"),
+    ],
+)
+def test_harness_completion_closes_running_row_with_terminal_status(
+    exit_code: int, stderr: str, expected: str
+) -> None:
+    r = HudReducer()
+    trace = uuid4()
+    r.apply(
+        HarnessDispatched(
+            trace_id=trace,
+            harness="screenshot",
+            timestamp_ns=at(1),
+        )
+    )
+    assert [item.status for item in snap(r, 1.5).active_operations] == ["running"]
+
+    r.apply(
+        HarnessCompleted(
+            trace_id=trace,
+            harness="screenshot",
+            result=HarnessResult(
+                stderr=stderr,
+                exit_code=exit_code,
+                is_final=True,
+            ),
+            timestamp_ns=at(2),
+        )
+    )
+
+    s = snap(r, 3)
+    assert s.active_operations == ()
+    assert s.recent_outputs[-1].status == expected
+    if stderr:
+        assert stderr in s.recent_outputs[-1].detail
 
 
 def test_waiting_for_approval_beats_working() -> None:
