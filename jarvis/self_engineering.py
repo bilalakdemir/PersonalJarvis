@@ -84,6 +84,39 @@ def _dispatch_harness_pair(left: dict[str, Any], right: dict[str, Any]) -> bool:
     )
 
 
+def _capture_active_context(
+    snapshot: dict[str, Any], cache: dict[str, dict[str, Any]]
+) -> None:
+    """Remember bounded, already-redacted HUD operation context across polls."""
+    rows = snapshot.get("active_operations")
+    if not isinstance(rows, list):
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        activity_id = str(row.get("activity_id") or "").strip()
+        if not activity_id:
+            continue
+        cache[activity_id] = dict(row)
+    while len(cache) > 256:
+        cache.pop(next(iter(cache)))
+
+
+def _enrich_failures(
+    rows: Iterable[dict[str, Any]], cache: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        current = dict(row)
+        prior = cache.get(str(current.get("activity_id") or ""))
+        if prior:
+            request_detail = str(prior.get("detail") or "").strip()
+            if request_detail and request_detail != str(current.get("detail") or "").strip():
+                current["request_detail"] = request_detail
+        enriched.append(current)
+    return enriched
+
+
 def related_failures(
     primary: dict[str, Any], rows: Iterable[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -552,12 +585,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     state_path = eng / "state.json"; state = _state(state_path)
     url = f"http://127.0.0.1:{_port(repo)}/api/hud/snapshot"
+    active_context: dict[str, dict[str, Any]] = {}
     while True:
         snap = _snapshot(url)
         if snap is None:
             if args.once: return 3
             time.sleep(args.poll); continue
-        rows = failed(snap); ids = [str(x["activity_id"]) for x in rows]
+        _capture_active_context(snap, active_context)
+        rows = _enrich_failures(failed(snap), active_context)
+        ids = [str(x["activity_id"]) for x in rows]
         if not state.get("bootstrapped"):
             state.update(bootstrapped=True, seen=ids); _save(state_path, state)
         else:
