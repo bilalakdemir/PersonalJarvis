@@ -163,15 +163,34 @@ def _changed(worktree: Path) -> list[str]:
     return sorted({x.strip().replace("\\", "/") for x in out if x.strip()})
 
 
-def _tests(worktree: Path, changed: list[str]) -> tuple[bool, tuple[str, ...], str]:
+def _tests(
+    worktree: Path, changed: list[str]
+) -> tuple[bool, tuple[str, ...], str, str]:
     explicit = tuple(p for p in changed if p.startswith("tests/") and p.endswith(".py"))
     selected = tuple(dict.fromkeys((*explicit, *SMOKE)))
     run = _run([_python(), "-m", "pytest", *selected, "-q", "-p", "no:cacheprovider"],
                worktree, timeout=1800)
+    pytest_output = run.stdout + run.stderr
+    pytest_unavailable = (
+        run.returncode != 0
+        and ("No module named pytest" in pytest_output or "No module named 'pytest'" in pytest_output)
+    )
+    local_validation = (
+        "unavailable" if pytest_unavailable else "passed" if run.returncode == 0 else "failed"
+    )
     gates = _run([_python(), "scripts/ci/run_gates.py", "--base", "origin/develop", "--pr"],
                  worktree, timeout=1200)
-    output = (run.stdout + run.stderr + "\n--- gates ---\n" + gates.stdout + gates.stderr)[-20000:]
-    return run.returncode == 0 and gates.returncode == 0, selected, output
+    prefix = "LOCAL_TESTS_UNAVAILABLE\n" if pytest_unavailable else ""
+    output = (
+        prefix + pytest_output + "\n--- gates ---\n" + gates.stdout + gates.stderr
+    )[-20000:]
+    tests_ok = run.returncode == 0 or pytest_unavailable
+    return tests_ok and gates.returncode == 0, selected, output, local_validation
+
+
+def _push_branch(repo: Path, branch: str) -> subprocess.CompletedProcess[str]:
+    """Push a shared worktree branch from the primary repo so its hooks remain active."""
+    return _git(repo, "push", "origin", f"refs/heads/{branch}:refs/heads/{branch}")
 
 
 def _engineer_prompt(row: dict[str, Any], logs: str) -> str:
@@ -190,10 +209,17 @@ Finish with OUTCOME: FIXED | NO_CODE_CHANGE | NEEDS_HUMAN.
 """
 
 
-def _verify_prompt(row: dict[str, Any], floor: str, tests: tuple[str, ...]) -> str:
+def _verify_prompt(
+    row: dict[str, Any], floor: str, tests: tuple[str, ...], local_validation: str
+) -> str:
+    tests_note = (
+        "Local pytest unavailable; CI is authoritative for tests."
+        if local_validation == "unavailable"
+        else f"Local tests selected: {', '.join(tests)}."
+    )
     return f"""Read AGENTS.md. You are an independent READ-ONLY verifier. Inspect git diff/status.
 Original failure: {redact(str(row.get('detail') or ''))}
-Risk floor: {floor}. Tests run: {', '.join(tests)}.
+Risk floor: {floor}. {tests_note}
 Judge root-cause fit, regression coverage, scope, and safety. Do not edit.
 Finish exactly with:\nVERDICT: PASS | FAIL | NEEDS_HUMAN\nRISK: LOW | MEDIUM | HIGH\nREASON: <brief>\n"""
 
@@ -221,43 +247,53 @@ def _incident(repo: Path, data: Path, row: dict[str, Any], auto_merge: bool) -> 
     if not changed:
         return {"status": "no_code_change", "branch": branch}
     floor = risk(changed)
-    ok, tests, test_output = _tests(worktree, changed)
+    ok, tests, test_output, local_validation = _tests(worktree, changed)
     (store / "validation.txt").write_text(test_output, encoding="utf-8")
     if not ok:
-        return {"status": "validation_failed", "branch": branch, "changed": changed}
-    check = _codex(worktree, _verify_prompt(row, floor, tests), "read-only")
+        return {"status": "validation_failed", "branch": branch, "changed": changed,
+                "local_validation": local_validation}
+    check = _codex(
+        worktree, _verify_prompt(row, floor, tests, local_validation), "read-only"
+    )
     raw = redact(check.stdout + check.stderr)
     (store / "verifier.txt").write_text(raw, encoding="utf-8")
     decision, final_risk = verdict(raw, floor)
     if check.returncode or decision != "PASS":
-        return {"status": "needs_human", "branch": branch, "risk": final_risk, "changed": changed}
+        return {"status": "needs_human", "branch": branch, "risk": final_risk,
+                "changed": changed, "local_validation": local_validation}
     for path in changed:
         if _git(worktree, "add", "--", path).returncode:
             raise RuntimeError(f"could not stage {path}")
     commit = _git(worktree, "commit", "-m", "fix: automated AERION incident repair", "--", *changed)
     if commit.returncode:
         raise RuntimeError(commit.stderr[-1000:])
-    push = _git(worktree, "push", "--set-upstream", "origin", f"HEAD:refs/heads/{branch}")
+    push = _push_branch(repo, branch)
     if push.returncode:
         raise RuntimeError(push.stderr[-1000:])
     gh = shutil.which("gh")
     if not gh:
-        return {"status": "branch_pushed", "branch": branch, "risk": final_risk}
+        return {"status": "branch_pushed", "branch": branch, "risk": final_risk,
+                "local_validation": local_validation}
     body = store / "pr.md"
-    body.write_text(f"Automated AERION repair for `{activity}`.\n\nRisk: **{final_risk}**.\n", encoding="utf-8")
+    body.write_text(
+        f"Automated AERION repair for `{activity}`.\n\n"
+        f"Risk: **{final_risk}**.\nLocal validation: **{local_validation}**.\n",
+        encoding="utf-8",
+    )
     cmd = [gh, "pr", "create", "--base", "develop", "--head", branch,
            "--title", f"fix: AERION self-heal {row.get('label') or 'failure'}", "--body-file", str(body)]
     if final_risk == "HIGH":
         cmd.append("--draft")
-    pr = _run(cmd, worktree)
+    pr = _run(cmd, repo)
     if pr.returncode:
-        return {"status": "branch_pushed", "branch": branch, "risk": final_risk}
+        return {"status": "branch_pushed", "branch": branch, "risk": final_risk,
+                "local_validation": local_validation}
     url = next((x for x in pr.stdout.splitlines() if x.startswith("http")), pr.stdout.strip())
     merged = False
     if auto_merge and final_risk == "LOW":
-        merged = _run([gh, "pr", "merge", "--auto", "--squash", branch], worktree).returncode == 0
+        merged = _run([gh, "pr", "merge", "--auto", "--squash", branch], repo).returncode == 0
     return {"status": "pr_opened", "branch": branch, "risk": final_risk, "pr_url": url,
-            "auto_merge": merged, "changed": changed}
+            "auto_merge": merged, "changed": changed, "local_validation": local_validation}
 
 
 def _acquire_lock(path: Path):
