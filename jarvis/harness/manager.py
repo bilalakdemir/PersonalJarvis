@@ -127,21 +127,21 @@ class HarnessManager:
                         )
                     yield result
             except asyncio.CancelledError:
-                terminal = HarnessResult(
+                terminal = terminal or HarnessResult(
                     stderr="harness dispatch cancelled",
                     exit_code=130,
                     is_final=True,
                 )
                 raise
             except GeneratorExit:
-                terminal = HarnessResult(
+                terminal = terminal or HarnessResult(
                     stderr="harness dispatch closed before completion",
                     exit_code=130,
                     is_final=True,
                 )
                 raise
             except Exception as exc:
-                terminal = HarnessResult(
+                terminal = terminal or HarnessResult(
                     stderr=f"{type(exc).__name__}: {exc}",
                     exit_code=1,
                     is_final=True,
