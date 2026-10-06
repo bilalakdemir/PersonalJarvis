@@ -36,6 +36,18 @@ def test_nvidia_is_a_registered_brain_plugin() -> None:
     assert brain.can_call_tools() is True
 
 
+def test_nvidia_vision_capability_is_model_specific(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(cfg, "DATA_DIR", tmp_path)
+    from jarvis.plugins.brain.nvidia import NvidiaBrain
+
+    assert NvidiaBrain("nvidia/nemotron-3-super-120b-a12b").supports_vision is False
+    assert NvidiaBrain("nvidia/nemotron-3-ultra-550b-a55b").supports_vision is False
+    assert (
+        NvidiaBrain("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning").supports_vision
+        is True
+    )
+
+
 def test_nvidia_credential_slot_resolves() -> None:
     assert cfg.PROVIDER_SECRET_CANDIDATES["nvidia"] == (
         ("nvidia_api_key", "NVIDIA_API_KEY"),
