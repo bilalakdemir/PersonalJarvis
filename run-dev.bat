@@ -28,6 +28,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM AERION Self-Engineering v1: DEV-only sidecar. It watches canonical HUD
+REM failures, repairs only inside isolated git worktrees, and uses the existing
+REM Codex ChatGPT login (never OPENAI_API_KEY). Set AERION_SELF_ENGINEERING=0
+REM before launch for an explicit opt-out.
+if /I not "%AERION_SELF_ENGINEERING%"=="0" (
+    start "" pythonw -m jarvis.self_engineering --repo-root "%CD%" --data-dir "%CD%\data-dev" --auto-merge-low-risk
+)
+
 if "%1"=="--debug" (
     set JARVIS_DEBUG=1
     python -m jarvis.ui.web.launcher --instance dev
