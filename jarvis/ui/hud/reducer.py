@@ -1809,3 +1809,20 @@ class HudReducer:
             if approval.expires_at_ns and approval.expires_at_ns <= now_ns:
                 self._approvals.pop(approval_id, None)
                 for idx_key, idx_val in list(self._tool_approval_index.items()):
+                    if idx_val == approval_id:
+                        self._tool_approval_index.pop(idx_key, None)
+        for key in self._ops.keys():
+            record = self._ops.get(key)
+            if record is None:
+                continue
+            ttl = STALE_AFTER_NS.get(record.kind)
+            if ttl is not None and now_ns - record.updated_at_ns > ttl:
+                self._ops.force_close(key)
+
+
+__all__ = [
+    "HudReducer",
+    "register_memory_mapper",
+    "registered_memory_mappers",
+    "unregister_memory_mapper",
+]
