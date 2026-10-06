@@ -75,6 +75,14 @@ def test_prompt_routes_app_actions_to_computer_use() -> None:
     )
 
 
+def test_prompt_routes_website_work_to_isolated_browser() -> None:
+    """Website interaction belongs to Jarvis' isolated browser, not desktop CU."""
+    assert "society-browser" in ROUTER_TOOLS
+    assert "society_browser" in SYSTEM_PROMPT
+    assert "WEBSITE/WEB-APP" in SYSTEM_PROMPT
+    assert "LIVE-DESKTOP" in SYSTEM_PROMPT
+
+
 def test_search_web_is_a_real_router_tool_and_advertised() -> None:
     """search_web is a REAL router tool now — and the prompt must say so.
 
