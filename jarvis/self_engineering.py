@@ -38,6 +38,12 @@ MEDIUM = ("jarvis/core/", "jarvis/brain/", "jarvis/memory/", "jarvis/ui/")
 BLOCKED = {"AGENTS.md", "CLAUDE.md", "jarvis.toml", "PROJECT.md", "STATE.md",
            "TASKS.md", "DECISIONS.md", "BACKLOG.md", "jarvis/core/config_writer.py"}
 SECRET = re.compile(r"(?i)\b(?:nvapi-|sk-|gh[pousr]_)[A-Za-z0-9_-]{8,}|\bBearer\s+\S+")
+INCIDENT_WINDOW_NS = 30 * 1_000_000_000
+_INCIDENT_FIELDS = (
+    "activity_id", "kind", "label", "status", "trace_id", "project_id",
+    "mission_id", "task_id", "worker_id", "run_id", "request_detail", "detail",
+    "started_at_ns", "updated_at_ns",
+)
 
 
 def redact(text: str) -> str:
