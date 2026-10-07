@@ -796,13 +796,33 @@ class TestBrowserUrlFastPath:
         plan = match_local_action("wie gehe ich auf x.com")
         assert plan is None or plan.mode is not LocalActionMode.DIRECT
 
-    def test_browser_with_followup_work_still_goes_to_cu(self) -> None:
-        # Site + further UI work must keep the CU loop (it has to act there).
+    def test_browser_url_readback_stands_down_to_router(self) -> None:
+        # Live acceptance regression (2026-10-07): website work must be handled
+        # by the isolated society_browser, never by screenshot Computer-Use.
         plan = match_local_action(
-            "öffne chrome und gehe auf x.com und poste einen tweet"
+            "Open Brave and go to https://example.com. Tell me the page title.",
+            lang="en",
+            _registry=None,
         )
-        assert plan is not None
-        assert plan.mode is LocalActionMode.COMPUTER_USE
+        assert plan is None
+
+    def test_browser_url_click_stands_down_to_router(self) -> None:
+        # A click that is explicitly scoped to a concrete website is web-app
+        # work. The router-visible society_browser owns it; native desktop apps
+        # still use the Computer-Use loop.
+        plan = match_local_action(
+            "Open Brave and go to https://example.com and click Login",
+            lang="en",
+            _registry=None,
+        )
+        assert plan is None
+
+    def test_browser_url_publish_stands_down_to_router(self) -> None:
+        plan = match_local_action(
+            "öffne chrome und gehe auf x.com und poste einen tweet",
+            _registry=None,
+        )
+        assert plan is None
 
     def test_plain_sentence_with_domain_noun_stays_brain(self) -> None:
         # A domain mention without a goto/open verb shape must not launch.
