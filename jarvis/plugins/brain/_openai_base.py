@@ -734,6 +734,29 @@ def _rejection_confidence(exc: Exception, parameter: str) -> str | None:
     return "message" if parameter in message else None
 
 
+_REASONING_EFFORT_LADDER = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')
+
+
+def _literal_reasoning_effort_fallback(exc: Exception) -> str | None:
+    '''Return the lowest explicitly allowed effort from a literal validator error.'''
+    _, _, message = _error_metadata(exc)
+    if (
+        'reasoning_effort' not in message
+        or 'literal_error' not in message
+        or 'input should be' not in message
+    ):
+        return None
+    allowed_text = message.split('input should be', 1)[1][:240]
+    allowed_text = allowed_text.replace(chr(92), '')
+    allowed_text = allowed_text.split("'input'", 1)[0]
+    allowed = [
+        effort
+        for effort in _REASONING_EFFORT_LADDER
+        if (chr(39) + effort + chr(39)) in allowed_text
+    ]
+    return allowed[0] if allowed else None
+
+
 #: An endpoint may REQUIRE internal reasoning and refuse every attempt to turn
 #: it off. That is a different complaint from "unsupported parameter": the knob
 #: is understood, its OFF value is refused — so it carries none of the markers
@@ -813,11 +836,13 @@ def _apply_adaptation(kwargs: dict[str, Any], field: str) -> dict[str, Any] | No
         adapted = dict(kwargs)
         adapted["max_completion_tokens"] = adapted.pop("max_tokens")
         return adapted
-    if field == "reasoning_effort:minimal":
-        if kwargs.get("reasoning_effort") != "none":
+    if field.startswith("reasoning_effort:"):
+        target = field.split(":", 1)[1]
+        current = kwargs.get("reasoning_effort")
+        if current is None or current == target:
             return None
         adapted = dict(kwargs)
-        adapted["reasoning_effort"] = "minimal"
+        adapted["reasoning_effort"] = target
         return adapted
     if field == "reasoning:mandatory":
         return _without_reasoning_opt_out(kwargs)
@@ -879,6 +904,18 @@ def _compatible_retry_kwargs(
         retry_kwargs = _without_reasoning_opt_out(kwargs)
         if retry_kwargs is not None:
             return retry_kwargs, "reasoning:mandatory", True
+
+    literal_effort = _literal_reasoning_effort_fallback(exc)
+    current_effort = kwargs.get("reasoning_effort")
+    if (
+        literal_effort is not None
+        and current_effort is not None
+        and current_effort != literal_effort
+        and f"reasoning_effort:{literal_effort}" not in adaptations
+    ):
+        retry_kwargs = dict(kwargs)
+        retry_kwargs["reasoning_effort"] = literal_effort
+        return retry_kwargs, f"reasoning_effort:{literal_effort}", True
 
     # Reasoning effort degrades in two steps: a model that knows the knob but
     # not the value "none" (o-series, gpt-5 base) still honors "minimal" —
