@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import jarvis.self_engineering as self_engineering
+import jarvis.runtime_acceptance as runtime_acceptance
 from jarvis.self_engineering import _port, _save, _state, failed, redact, risk, verdict
 
 
@@ -1059,3 +1060,221 @@ def test_login_config_and_expired_token_errors_are_never_transient() -> None:
         not self_engineering._transient_agent_failure(message)
         for message in cases
     )
+
+
+def _install_verified_runtime_gate_flow(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    acceptance_status: runtime_acceptance.RuntimeAcceptanceStatus,
+    acceptance_reason: str = "test",
+    gh_available: bool = False,
+):
+    changed = [
+        "jarvis/plugins/tool/open_app.py",
+        "tests/unit/plugins/tool/test_open_app.py",
+    ]
+    codex_calls: list[tuple[str, str]] = []
+    git_calls: list[tuple[str, ...]] = []
+    push_calls: list[str] = []
+    run_calls: list[list[str]] = []
+
+    def fake_codex(worktree: Path, prompt: str, sandbox: str):
+        codex_calls.append((sandbox, prompt))
+        text = (
+            "OUTCOME: FIXED"
+            if len(codex_calls) == 1
+            else "VERDICT: PASS\nRISK: LOW\nREASON: verified"
+        )
+        return subprocess.CompletedProcess(["codex"], 0, text, "")
+
+    def fake_git(repo: Path, *args: str):
+        git_calls.append(args)
+        return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+    def fake_run(cmd, cwd, *, stdin=None, timeout=300, env=None):
+        run_calls.append(list(cmd))
+        if cmd[:3] == ["gh", "pr", "create"]:
+            return subprocess.CompletedProcess(cmd, 0, "https://example.test/pr/1\n", "")
+        if cmd[:3] == ["gh", "pr", "merge"]:
+            return subprocess.CompletedProcess(cmd, 0, "merged\n", "")
+        raise AssertionError(f"unexpected _run command: {cmd}")
+
+    monkeypatch.setattr(self_engineering, "_codex", fake_codex)
+    monkeypatch.setattr(self_engineering, "_changed", lambda worktree: list(changed))
+    monkeypatch.setattr(
+        self_engineering,
+        "_tests",
+        lambda worktree, paths: (True, tuple(paths), "ok", "passed"),
+    )
+    monkeypatch.setattr(self_engineering, "_git", fake_git)
+    monkeypatch.setattr(
+        self_engineering,
+        "_push_branch",
+        lambda repo, branch: (
+            push_calls.append(branch)
+            or subprocess.CompletedProcess(["git", "push"], 0, "", "")
+        ),
+    )
+    monkeypatch.setattr(self_engineering.time, "time", lambda: 12_345)
+    monkeypatch.setattr(
+        self_engineering,
+        "run_runtime_acceptance",
+        lambda **kwargs: runtime_acceptance.RuntimeAcceptanceResult(
+            acceptance_status,
+            acceptance_reason,
+            "Example Domain" if acceptance_status is runtime_acceptance.RuntimeAcceptanceStatus.PASS else "",
+            (),
+            "runtime-acceptance-test",
+        ),
+    )
+    monkeypatch.setattr(
+        self_engineering.shutil,
+        "which",
+        lambda name: "gh" if gh_available and name == "gh" else None,
+    )
+    if gh_available:
+        monkeypatch.setattr(self_engineering, "_run", fake_run)
+
+    rows = [
+        {
+            "activity_id": "tool:browser",
+            "kind": "tool",
+            "label": "dispatch_to_harness",
+            "status": "failed",
+            "request_detail": (
+                "Open Brave and go to https://example.com. "
+                "Tell me the page title."
+            ),
+            "updated_at_ns": 100,
+        }
+    ]
+    return changed, rows, git_calls, push_calls, run_calls
+
+
+def test_runtime_acceptance_fail_blocks_commit_and_push(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    _, rows, git_calls, push_calls, _ = _install_verified_runtime_gate_flow(
+        tmp_path,
+        monkeypatch,
+        acceptance_status=runtime_acceptance.RuntimeAcceptanceStatus.FAIL,
+        acceptance_reason="forbidden_tool_attempt",
+    )
+
+    result = self_engineering._incident(
+        tmp_path / "repo",
+        tmp_path / "data",
+        rows,
+        True,
+    )
+
+    assert result["status"] == "runtime_acceptance_failed"
+    assert result["runtime_acceptance"] == "fail"
+    assert result["reason"] == "forbidden_tool_attempt"
+    assert not any(args and args[0] == "add" for args in git_calls)
+    assert push_calls == []
+
+
+def test_runtime_acceptance_transient_preserves_patch_without_shipping(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    changed, rows, git_calls, push_calls, _ = _install_verified_runtime_gate_flow(
+        tmp_path,
+        monkeypatch,
+        acceptance_status=runtime_acceptance.RuntimeAcceptanceStatus.TRANSIENT,
+        acceptance_reason="provider_overloaded",
+    )
+
+    result = self_engineering._incident(
+        tmp_path / "repo",
+        tmp_path / "data",
+        rows,
+        True,
+    )
+
+    assert result["status"] == "needs_human"
+    assert result["reason"] == "runtime_acceptance_pending_transient"
+    assert result["runtime_acceptance"] == "transient"
+    assert result["changed"] == changed
+    assert not any(args and args[0] == "add" for args in git_calls)
+    assert push_calls == []
+
+
+def test_unsupported_runtime_acceptance_allows_pr_but_never_auto_merge(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    _, rows, _, push_calls, run_calls = _install_verified_runtime_gate_flow(
+        tmp_path,
+        monkeypatch,
+        acceptance_status=runtime_acceptance.RuntimeAcceptanceStatus.UNSUPPORTED,
+        acceptance_reason="no_supported_runtime_profile",
+        gh_available=True,
+    )
+
+    result = self_engineering._incident(
+        tmp_path / "repo",
+        tmp_path / "data",
+        rows,
+        True,
+    )
+
+    assert result["status"] == "pr_opened"
+    assert result["runtime_acceptance"] == "unsupported"
+    assert result["auto_merge"] is False
+    assert len(push_calls) == 1
+    assert any(cmd[:3] == ["gh", "pr", "create"] for cmd in run_calls)
+    assert not any(cmd[:3] == ["gh", "pr", "merge"] for cmd in run_calls)
+
+
+def test_passed_runtime_acceptance_allows_low_risk_auto_merge(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    _, rows, _, push_calls, run_calls = _install_verified_runtime_gate_flow(
+        tmp_path,
+        monkeypatch,
+        acceptance_status=runtime_acceptance.RuntimeAcceptanceStatus.PASS,
+        acceptance_reason="runtime_contract_satisfied",
+        gh_available=True,
+    )
+
+    result = self_engineering._incident(
+        tmp_path / "repo",
+        tmp_path / "data",
+        rows,
+        True,
+    )
+
+    assert result["status"] == "pr_opened"
+    assert result["runtime_acceptance"] == "pass"
+    assert result["auto_merge"] is True
+    assert len(push_calls) == 1
+    assert any(cmd[:3] == ["gh", "pr", "merge"] for cmd in run_calls)
+
+
+def test_runtime_acceptance_runner_exception_fails_closed_before_commit(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    _, rows, git_calls, push_calls, _ = _install_verified_runtime_gate_flow(
+        tmp_path,
+        monkeypatch,
+        acceptance_status=runtime_acceptance.RuntimeAcceptanceStatus.PASS,
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "run_runtime_acceptance",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("runner exploded")),
+    )
+
+    result = self_engineering._incident(
+        tmp_path / "repo",
+        tmp_path / "data",
+        rows,
+        True,
+    )
+
+    assert result["status"] == "needs_human"
+    assert result["runtime_acceptance"] == "runner_error"
+    assert result["reason"].startswith("runtime_acceptance_runner_error:")
+    assert not any(args and args[0] == "add" for args in git_calls)
+    assert push_calls == []
