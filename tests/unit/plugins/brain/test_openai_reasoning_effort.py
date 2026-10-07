@@ -293,3 +293,37 @@ async def test_extra_body_is_passed_as_extra_body_not_top_level() -> None:
         "the native knob must not be double-sent next to a gateway "
         "reasoning directive"
     )
+
+
+_NVIDIA_LITERAL_EFFORT_400 = (
+    "Error code: 400 - {'error': {'message': '[{\\'type\\': \\'literal_error\\', '"
+    "\\'loc\\': (\\'body\\', \\'reasoning_effort\\'), \\'msg\\': \"Input should be 'low', 'medium' or 'high'\", '"
+    "\\'input\\': \\'none\\'}]', 'type': 'Bad Request', 'param': None, 'code': 400}}"
+)
+
+
+async def test_literal_allowed_efforts_retry_with_low() -> None:
+    client = _SequenceClient([RuntimeError(_NVIDIA_LITERAL_EFFORT_400)])
+    client.base_url = "https://integrate.api.nvidia.com/v1"
+    await _create_with_token_param_retry(
+        client, {"model": "vision-model", "messages": [], "reasoning_effort": "none"}
+    )
+    assert len(client.calls) == 2
+    assert client.calls[0]["reasoning_effort"] == "none"
+    assert client.calls[1]["reasoning_effort"] == "low"
+
+
+async def test_literal_effort_adaptation_is_cached_per_endpoint_model() -> None:
+    first = _SequenceClient([RuntimeError(_NVIDIA_LITERAL_EFFORT_400)])
+    first.base_url = "https://integrate.api.nvidia.com/v1"
+    await _create_with_token_param_retry(
+        first, {"model": "vision-model", "messages": [], "reasoning_effort": "none"}
+    )
+
+    second = _SequenceClient()
+    second.base_url = "https://integrate.api.nvidia.com/v1"
+    await _create_with_token_param_retry(
+        second, {"model": "vision-model", "messages": [], "reasoning_effort": "none"}
+    )
+    assert len(second.calls) == 1
+    assert second.calls[0]["reasoning_effort"] == "low"
