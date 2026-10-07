@@ -58,6 +58,8 @@ from __future__ import annotations
 import logging
 import re
 
+from jarvis.brain.local_action_gate import is_managed_browser_turn
+
 log = logging.getLogger(__name__)
 
 
@@ -253,6 +255,8 @@ def llm_computer_use_allowed(user_text: str) -> bool:
     normalized = _normalized(user_text).strip()
     if not normalized:
         return True
+    if is_managed_browser_turn(user_text):
+        return False
     if _DESKTOP_ACTION_RE.search(normalized) or _EXPLICIT_HARNESS_RE.search(
         normalized
     ):
@@ -290,6 +294,25 @@ CU_BLOCKED_MODEL_FEEDBACK: str = (
 )
 
 
+def website_vehicle_blocked(tool_name: str, user_text: str) -> bool:
+    """Keep website work off both desktop and generic harness vehicles."""
+    return tool_name in {"computer_use", "dispatch_to_harness"} and is_managed_browser_turn(
+        user_text
+    )
+
+
+def cu_blocked_feedback(user_text: str) -> str:
+    """Explain the actual refusal and name the permitted execution surface."""
+    if is_managed_browser_turn(user_text):
+        return (
+            "Desktop/harness execution was NOT executed: this is website work. Call "
+            "society_browser to navigate and inspect or interact with the page "
+            "in the managed browser. Do not call dispatch_to_harness or drive "
+            "the user's desktop. Report only results observed from that tool."
+        )
+    return CU_BLOCKED_MODEL_FEEDBACK
+
+
 def is_explicit_computer_use_turn(user_text: str) -> bool:
     """Does this turn unmistakably ask Jarvis to OPERATE the desktop?
 
@@ -316,7 +339,7 @@ def is_explicit_computer_use_turn(user_text: str) -> bool:
         return False
     if _EXPLICIT_HARNESS_RE.search(normalized):
         return True
-    if _is_look_request(user_text):
+    if is_managed_browser_turn(user_text) or _is_look_request(user_text):
         return False
     return bool(
         _DESKTOP_ACTION_RE.search(normalized)
@@ -328,6 +351,7 @@ __all__ = [
     "CU_BLOCKED_MODEL_FEEDBACK",
     "CU_VEHICLE_TOOL_NAMES",
     "FOLLOW_UP_WINDOW_S",
+    "cu_blocked_feedback",
     "is_explicit_computer_use_turn",
     "llm_computer_use_allowed",
 ]
