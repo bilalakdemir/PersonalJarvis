@@ -25,6 +25,10 @@ from typing import Any, Iterable
 
 from jarvis.core.process_utils import NO_WINDOW_CREATIONFLAGS
 from jarvis.core.redact import redact_secrets
+from jarvis.runtime_acceptance import (
+    RuntimeAcceptanceStatus,
+    run_runtime_acceptance,
+)
 
 LOG = logging.getLogger("aerion.self_engineering")
 SMOKE = (
@@ -958,6 +962,52 @@ def _incident(
             "activities": activity_ids,
             "reason": "max_rework_rounds_exhausted",
         }
+
+    try:
+        runtime_acceptance = run_runtime_acceptance(
+            worktree=worktree,
+            repo=repo,
+            incident_dir=store,
+            rows=rows,
+            python_executable=_python(),
+        )
+    except Exception as exc:  # noqa: BLE001 - runtime gate failure must preserve the patch
+        LOG.exception("runtime acceptance runner failed")
+        return {
+            "status": "needs_human",
+            "branch": branch,
+            "risk": final_risk,
+            "changed": changed,
+            "local_validation": local_validation,
+            "runtime_acceptance": "runner_error",
+            "activities": activity_ids,
+            "reason": f"runtime_acceptance_runner_error: {redact(str(exc))[:800]}",
+        }
+
+    runtime_status = runtime_acceptance.status.value
+    if runtime_acceptance.status is RuntimeAcceptanceStatus.FAIL:
+        return {
+            "status": "runtime_acceptance_failed",
+            "branch": branch,
+            "risk": final_risk,
+            "changed": changed,
+            "local_validation": local_validation,
+            "runtime_acceptance": runtime_status,
+            "activities": activity_ids,
+            "reason": runtime_acceptance.reason,
+        }
+    if runtime_acceptance.status is RuntimeAcceptanceStatus.TRANSIENT:
+        return {
+            "status": "needs_human",
+            "branch": branch,
+            "risk": final_risk,
+            "changed": changed,
+            "local_validation": local_validation,
+            "runtime_acceptance": runtime_status,
+            "activities": activity_ids,
+            "reason": "runtime_acceptance_pending_transient",
+        }
+
     for path in changed:
         if _git(worktree, "add", "--", path).returncode:
             raise RuntimeError(f"could not stage {path}")
@@ -976,12 +1026,15 @@ def _incident(
             "branch": branch,
             "risk": final_risk,
             "local_validation": local_validation,
+            "runtime_acceptance": runtime_status,
             "activities": activity_ids,
         }
     body = store / "pr.md"
     body.write_text(
         f"Automated AERION repair for {len(activity_ids)} correlated activity failure(s).\n\n"
-        f"Risk: **{final_risk}**.\nLocal validation: **{local_validation}**.\n",
+        f"Risk: **{final_risk}**.\n"
+        f"Local validation: **{local_validation}**.\n"
+        f"Runtime acceptance: **{runtime_status}**.\n",
         encoding="utf-8",
     )
     cmd = [
@@ -998,11 +1051,16 @@ def _incident(
             "branch": branch,
             "risk": final_risk,
             "local_validation": local_validation,
+            "runtime_acceptance": runtime_status,
             "activities": activity_ids,
         }
     url = next((x for x in pr.stdout.splitlines() if x.startswith("http")), pr.stdout.strip())
     merged = False
-    if auto_merge and final_risk == "LOW":
+    if (
+        auto_merge
+        and final_risk == "LOW"
+        and runtime_acceptance.status is RuntimeAcceptanceStatus.PASS
+    ):
         merged = _run(
             [gh, "pr", "merge", "--auto", "--squash", branch], repo
         ).returncode == 0
@@ -1014,6 +1072,7 @@ def _incident(
         "auto_merge": merged,
         "changed": changed,
         "local_validation": local_validation,
+        "runtime_acceptance": runtime_status,
         "activities": activity_ids,
     }
 
