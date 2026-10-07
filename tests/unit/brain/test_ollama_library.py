@@ -56,6 +56,29 @@ def test_search_parser_reads_the_full_entry(search_page: str) -> None:
     assert qwen["updated"] == "2 months ago"
 
 
+def test_search_parser_reads_current_svg_badges_and_download_count() -> None:
+    page = """
+    <ul>
+      <li>
+        <a href="/library/embeddinggemma-2">
+          <p>EmbeddingGemma 2 is a multimodal embedding model.</p>
+          <span><span>270m</span></span>
+          <span><svg></svg>Vision</span>
+          <span><svg></svg>Embedding</span>
+          <span title="5,979 downloads"><svg></svg><span>5,979</span></span>
+        </a>
+      </li>
+    </ul>
+    """
+    model = library.parse_search_html(page)[0]
+
+    assert model["name"] == "embeddinggemma-2"
+    assert model["capabilities"] == ["vision", "embedding"]
+    assert model["sizes"] == ["270m"]
+    assert model["pulls"] == "5,979"
+    assert model["updated"] == ""
+
+
 def test_search_parser_keeps_a_minimal_entry(search_page: str) -> None:
     """An entry the page renders without badges still lists — a partial row
     beats a vanished model."""

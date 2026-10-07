@@ -226,11 +226,26 @@ def parse_search_html(page: str) -> list[dict[str, Any]]:
 
         spans = [_text(m.group(1)) for m in re.finditer(r"<span\b[^>]*>([^<]*)</span>", block)]
         spans = [s for s in spans if s]
-        capabilities = [badge for badge in _CAPABILITY_BADGES if badge in spans]
+        span_words = {s.casefold() for s in spans}
+        capabilities = [
+            badge
+            for badge in _CAPABILITY_BADGES
+            if badge in span_words
+            or re.search(
+                rf"</svg>\s*{re.escape(badge)}\s*</span>",
+                block,
+                re.IGNORECASE,
+            )
+        ]
         sizes = [s for s in spans if re.fullmatch(r"\d+(?:\.\d+)?[bm]", s)]
 
         pulls_match = re.search(
             r">\s*([\d.,]+[KMB]?)\s*</span>\s*<span[^>]*>(?:&nbsp;|\s)*Pulls", block
+        )
+        downloads_match = re.search(
+            r'title="([\d.,]+)\s+downloads"',
+            block,
+            re.IGNORECASE,
         )
         updated = next((s for s in spans if s.endswith(" ago") or s == "yesterday"), "")
 
@@ -239,9 +254,16 @@ def parse_search_html(page: str) -> list[dict[str, Any]]:
                 "name": name,
                 "description": description,
                 "capabilities": capabilities,
-                "cloud": "cloud" in spans,
+                "cloud": (
+                    "cloud" in span_words
+                    or bool(re.search(r"</svg>\s*Cloud\s*</span>", block, re.IGNORECASE))
+                ),
                 "sizes": sizes,
-                "pulls": pulls_match.group(1) if pulls_match else "",
+                "pulls": (
+                    pulls_match.group(1)
+                    if pulls_match
+                    else (downloads_match.group(1) if downloads_match else "")
+                ),
                 "updated": updated,
             }
         )
