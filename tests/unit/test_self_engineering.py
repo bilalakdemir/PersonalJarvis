@@ -420,3 +420,642 @@ def test_change_fingerprint_detects_same_path_revision(tmp_path: Path) -> None:
     )
 
     assert before != after
+
+
+def test_transient_agent_failure_classification_is_narrow() -> None:
+    assert self_engineering._transient_agent_failure(
+        "You've hit your usage limit. Try again later."
+    )
+    assert self_engineering._transient_agent_failure(
+        "ResourceExhausted: Worker local total request limit reached (16/16)"
+    )
+    assert not self_engineering._transient_agent_failure(
+        "Codex ChatGPT login is not connected"
+    )
+    assert not self_engineering._transient_agent_failure(
+        "401 Unauthorized: authentication failed"
+    )
+
+
+def test_retry_later_is_not_seen_and_uses_bounded_backoff() -> None:
+    state = {"bootstrapped": True, "seen": []}
+    result = {
+        "status": "retry_later",
+        "reason": "transient_worker_failure",
+        "activities": ["tool:a", "tool:b"],
+    }
+    rows = [
+        {
+            "activity_id": "tool:a",
+            "kind": "tool",
+            "label": "open_app",
+            "status": "failed",
+            "detail": "quota",
+        },
+        {
+            "activity_id": "tool:b",
+            "kind": "tool",
+            "label": "open_app",
+            "status": "failed",
+            "detail": "quota",
+        },
+    ]
+
+    terminal = self_engineering._record_incident_result(
+        state,
+        result,
+        ["tool:a", "tool:b"],
+        now=1_000.0,
+        retry_rows=rows,
+    )
+
+    assert terminal is False
+    assert state["seen"] == []
+    entry = state["retries"]["tool:a"]
+    assert entry["attempt"] == 1
+    assert entry["next_retry_at"] == 1_060.0
+    assert entry["owner"] == "tool:a"
+    assert entry["rows"] == rows
+    assert not self_engineering._retry_ready(state, "tool:a", 1_059.0)
+    assert self_engineering._retry_ready(state, "tool:a", 1_060.0)
+    assert self_engineering._due_retry_groups(state, 1_059.0) == []
+    assert self_engineering._due_retry_groups(state, 1_060.0) == [
+        (rows, ["tool:a", "tool:b"])
+    ]
+
+    self_engineering._record_incident_result(
+        state,
+        result,
+        ["tool:a", "tool:b"],
+        now=1_060.0,
+        retry_rows=rows,
+    )
+    entry = state["retries"]["tool:a"]
+    assert entry["attempt"] == 2
+    assert entry["next_retry_at"] == 1_360.0
+
+    self_engineering._record_incident_result(
+        state,
+        result,
+        ["tool:a", "tool:b"],
+        now=1_360.0,
+        retry_rows=rows,
+    )
+    assert state["retries"]["tool:a"]["attempt"] == 3
+    assert state["retries"]["tool:a"]["next_retry_at"] == 3_160.0
+
+    self_engineering._record_incident_result(
+        state,
+        result,
+        ["tool:a", "tool:b"],
+        now=3_160.0,
+        retry_rows=rows,
+    )
+    assert state["retries"]["tool:a"]["attempt"] == 4
+    assert state["retries"]["tool:a"]["next_retry_at"] == 4_960.0
+
+    terminal = self_engineering._record_incident_result(
+        state,
+        {"status": "worker_failed", "activities": ["tool:a", "tool:b"]},
+        ["tool:a", "tool:b"],
+        now=4_960.0,
+    )
+    assert terminal is True
+    assert state["seen"] == ["tool:a", "tool:b"]
+    assert "retries" not in state
+
+def test_transient_worker_failure_without_patch_retries_and_discards_worktree(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    discarded: list[tuple[Path, Path, str]] = []
+
+    monkeypatch.setattr(
+        self_engineering,
+        "_git",
+        lambda repo, *args: subprocess.CompletedProcess(["git", *args], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "_codex",
+        lambda worktree, prompt, sandbox: subprocess.CompletedProcess(
+            ["codex"], 1, "You've hit your usage limit. Try again later.", ""
+        ),
+    )
+    monkeypatch.setattr(self_engineering, "_changed", lambda worktree: [])
+    monkeypatch.setattr(
+        self_engineering,
+        "_discard_unmodified_worktree",
+        lambda repo, worktree, branch: discarded.append((repo, worktree, branch)) or True,
+    )
+    monkeypatch.setattr(self_engineering.time, "time", lambda: 4_444)
+
+    result = self_engineering._incident(
+        tmp_path / "repo",
+        tmp_path / "data",
+        [
+            {
+                "activity_id": "tool:quota",
+                "kind": "tool",
+                "label": "open_app",
+                "status": "failed",
+                "detail": "quota",
+                "updated_at_ns": 100,
+            }
+        ],
+        False,
+    )
+
+    assert result["status"] == "retry_later"
+    assert result["reason"] == "transient_worker_failure"
+    assert result["activities"] == ["tool:quota"]
+    assert len(discarded) == 1
+
+
+def test_two_verifier_rejections_can_rework_then_pass(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    changed = [
+        "jarvis/plugins/tool/open_app.py",
+        "tests/unit/plugins/tool/test_open_app.py",
+    ]
+    fingerprints = iter(["before-1", "after-1", "before-2", "after-2"])
+
+    def completed(text: str, code: int = 0) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(["agent"], code, text, "")
+
+    def fake_codex(worktree: Path, prompt: str, sandbox: str):
+        calls.append((sandbox, prompt))
+        responses = (
+            "OUTCOME: FIXED",
+            "VERDICT: FAIL\nRISK: LOW\nREASON: first gap",
+            "OUTCOME: FIXED",
+            "VERDICT: FAIL\nRISK: LOW\nREASON: second gap",
+            "OUTCOME: FIXED",
+            "VERDICT: PASS\nRISK: LOW\nREASON: complete",
+        )
+        return completed(responses[len(calls) - 1])
+
+    monkeypatch.setattr(self_engineering, "_codex", fake_codex)
+    monkeypatch.setattr(self_engineering, "_changed", lambda worktree: list(changed))
+    monkeypatch.setattr(
+        self_engineering,
+        "_change_fingerprint",
+        lambda worktree, paths: next(fingerprints),
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "_tests",
+        lambda worktree, paths: (True, tuple(paths), "ok", "passed"),
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "_git",
+        lambda repo, *args: subprocess.CompletedProcess(["git", *args], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "_push_branch",
+        lambda repo, branch: subprocess.CompletedProcess(["git", "push"], 0, "", ""),
+    )
+    monkeypatch.setattr(self_engineering.shutil, "which", lambda name: None)
+    monkeypatch.setattr(self_engineering.time, "time", lambda: 5_555)
+
+    result = self_engineering._incident(
+        tmp_path / "repo",
+        tmp_path / "data",
+        [
+            {
+                "activity_id": "tool:open",
+                "kind": "tool",
+                "label": "open_app",
+                "status": "failed",
+                "detail": "not found",
+                "updated_at_ns": 100,
+            }
+        ],
+        False,
+    )
+
+    assert result["status"] == "branch_pushed"
+    assert [sandbox for sandbox, _ in calls] == [
+        "workspace-write",
+        "read-only",
+        "workspace-write",
+        "read-only",
+        "workspace-write",
+        "read-only",
+    ]
+    incident_dir = next((tmp_path / "data" / "engineering" / "incidents").iterdir())
+    assert (incident_dir / "worker_rework_1.txt").exists()
+    assert (incident_dir / "verifier_rework_1.txt").exists()
+    assert (incident_dir / "worker_rework_2.txt").exists()
+    assert (incident_dir / "verifier_rework_2.txt").exists()
+
+
+def test_rework_loop_stops_at_configured_maximum(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    changed = [
+        "jarvis/plugins/tool/open_app.py",
+        "tests/unit/plugins/tool/test_open_app.py",
+    ]
+    fingerprints = iter(
+        [
+            "before-1", "after-1",
+            "before-2", "after-2",
+            "before-3", "after-3",
+        ]
+    )
+
+    def fake_codex(worktree: Path, prompt: str, sandbox: str):
+        calls.append((sandbox, prompt))
+        if len(calls) % 2:
+            text = "OUTCOME: FIXED"
+        else:
+            text = "VERDICT: FAIL\nRISK: LOW\nREASON: still incomplete"
+        return subprocess.CompletedProcess(["agent"], 0, text, "")
+
+    monkeypatch.setattr(self_engineering, "_codex", fake_codex)
+    monkeypatch.setattr(self_engineering, "_changed", lambda worktree: list(changed))
+    monkeypatch.setattr(
+        self_engineering,
+        "_change_fingerprint",
+        lambda worktree, paths: next(fingerprints),
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "_tests",
+        lambda worktree, paths: (True, tuple(paths), "ok", "passed"),
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "_git",
+        lambda repo, *args: subprocess.CompletedProcess(["git", *args], 0, "", ""),
+    )
+    monkeypatch.setattr(self_engineering.time, "time", lambda: 6_666)
+
+    result = self_engineering._incident(
+        tmp_path / "repo",
+        tmp_path / "data",
+        [
+            {
+                "activity_id": "tool:open",
+                "kind": "tool",
+                "label": "open_app",
+                "status": "failed",
+                "detail": "not found",
+                "updated_at_ns": 100,
+            }
+        ],
+        False,
+    )
+
+    assert result["status"] == "needs_human"
+    assert result["reason"] == "max_rework_rounds_exhausted"
+    assert len(calls) == 2 + 2 * self_engineering.MAX_REWORK_ROUNDS
+
+
+def test_transient_verifier_failure_with_patch_is_preserved_for_human(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    calls = 0
+    changed = [
+        "jarvis/plugins/tool/open_app.py",
+        "tests/unit/plugins/tool/test_open_app.py",
+    ]
+
+    def fake_codex(worktree: Path, prompt: str, sandbox: str):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return subprocess.CompletedProcess(["agent"], 0, "OUTCOME: FIXED", "")
+        return subprocess.CompletedProcess(
+            ["agent"], 1, "You've hit your usage limit. Try again later.", ""
+        )
+
+    monkeypatch.setattr(self_engineering, "_codex", fake_codex)
+    monkeypatch.setattr(self_engineering, "_changed", lambda worktree: list(changed))
+    monkeypatch.setattr(
+        self_engineering,
+        "_tests",
+        lambda worktree, paths: (True, tuple(paths), "ok", "passed"),
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "_git",
+        lambda repo, *args: subprocess.CompletedProcess(["git", *args], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "_discard_unmodified_worktree",
+        lambda *args: (_ for _ in ()).throw(
+            AssertionError("a patched worktree must never be discarded")
+        ),
+    )
+    monkeypatch.setattr(self_engineering.time, "time", lambda: 7_777)
+
+    result = self_engineering._incident(
+        tmp_path / "repo",
+        tmp_path / "data",
+        [
+            {
+                "activity_id": "tool:patched",
+                "kind": "tool",
+                "label": "open_app",
+                "status": "failed",
+                "detail": "not found",
+                "updated_at_ns": 100,
+            }
+        ],
+        False,
+    )
+
+    assert result["status"] == "needs_human"
+    assert result["reason"] == "verification_pending_transient"
+    assert result["changed"] == changed
+
+
+def test_auth_worker_failure_is_terminal_and_not_retried(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        self_engineering,
+        "_git",
+        lambda repo, *args: subprocess.CompletedProcess(["git", *args], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        self_engineering,
+        "_codex",
+        lambda worktree, prompt, sandbox: subprocess.CompletedProcess(
+            ["codex"], 1, "Codex ChatGPT login is not connected", ""
+        ),
+    )
+    monkeypatch.setattr(self_engineering, "_changed", lambda worktree: [])
+    monkeypatch.setattr(
+        self_engineering,
+        "_discard_unmodified_worktree",
+        lambda *args: (_ for _ in ()).throw(
+            AssertionError("auth failure must not enter transient cleanup")
+        ),
+    )
+    monkeypatch.setattr(self_engineering.time, "time", lambda: 8_888)
+
+    result = self_engineering._incident(
+        tmp_path / "repo",
+        tmp_path / "data",
+        [
+            {
+                "activity_id": "tool:auth",
+                "kind": "tool",
+                "label": "open_app",
+                "status": "failed",
+                "detail": "auth",
+                "updated_at_ns": 100,
+            }
+        ],
+        False,
+    )
+
+    assert result["status"] == "worker_failed"
+    assert result["activities"] == ["tool:auth"]
+
+
+def test_login_failed_try_again_is_not_transient() -> None:
+    assert not self_engineering._transient_agent_failure(
+        "Login failed; try again after signing in."
+    )
+
+
+def test_changed_includes_staged_paths_and_fails_closed_on_git_error(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_git(repo: Path, *args: str):
+        calls.append(args)
+        if args == ("diff", "--name-only"):
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        if args == ("diff", "--cached", "--name-only"):
+            return subprocess.CompletedProcess(
+                ["git", *args], 0, "jarvis/staged.py\n", ""
+            )
+        if args == ("ls-files", "--others", "--exclude-standard"):
+            return subprocess.CompletedProcess(["git", *args], 0, "", "")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(self_engineering, "_git", fake_git)
+    assert self_engineering._changed(tmp_path) == ["jarvis/staged.py"]
+    assert ("diff", "--cached", "--name-only") in calls
+
+    monkeypatch.setattr(
+        self_engineering,
+        "_git",
+        lambda repo, *args: subprocess.CompletedProcess(
+            ["git", *args], 1, "", "repository unavailable"
+        ),
+    )
+    try:
+        self_engineering._changed(tmp_path)
+    except RuntimeError as exc:
+        assert "repository unavailable" in str(exc)
+    else:
+        raise AssertionError("_changed must fail closed when git cannot enumerate changes")
+
+
+def test_transient_cleanup_refuses_staged_or_unknown_worktree_state(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    calls: list[tuple[Path, tuple[str, ...]]] = []
+
+    def staged_git(repo: Path, *args: str):
+        calls.append((repo, args))
+        if args[0] == "status":
+            return subprocess.CompletedProcess(
+                ["git", *args], 0, "M  jarvis/staged.py\n", ""
+            )
+        raise AssertionError("cleanup must not remove a dirty worktree")
+
+    monkeypatch.setattr(self_engineering, "_git", staged_git)
+    assert not self_engineering._discard_unmodified_worktree(
+        tmp_path / "repo", tmp_path / "worktree", "agent/test"
+    )
+    assert len(calls) == 1
+
+    monkeypatch.setattr(
+        self_engineering,
+        "_git",
+        lambda repo, *args: subprocess.CompletedProcess(
+            ["git", *args], 1, "", "status failed"
+        ),
+    )
+    assert not self_engineering._discard_unmodified_worktree(
+        tmp_path / "repo", tmp_path / "worktree", "agent/test"
+    )
+
+
+def test_codex_timeout_before_patch_enters_retry_later(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        self_engineering,
+        "_git",
+        lambda repo, *args: subprocess.CompletedProcess(["git", *args], 0, "", ""),
+    )
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["codex", "exec"], timeout=1200)
+
+    monkeypatch.setattr(self_engineering, "_codex", timeout)
+    monkeypatch.setattr(self_engineering, "_changed", lambda worktree: [])
+    monkeypatch.setattr(
+        self_engineering,
+        "_discard_unmodified_worktree",
+        lambda repo, worktree, branch: True,
+    )
+    monkeypatch.setattr(self_engineering.time, "time", lambda: 9_999)
+
+    result = self_engineering._incident(
+        tmp_path / "repo",
+        tmp_path / "data",
+        [
+            {
+                "activity_id": "tool:timeout",
+                "kind": "tool",
+                "label": "open_app",
+                "status": "failed",
+                "detail": "provider stalled",
+                "updated_at_ns": 100,
+            }
+        ],
+        False,
+    )
+
+    assert result["status"] == "retry_later"
+    assert result["reason"] == "transient_worker_failure"
+
+
+def test_retry_snapshot_persists_across_state_reload_without_secrets(
+    tmp_path: Path,
+) -> None:
+    state = {"bootstrapped": True, "seen": []}
+    rows = [
+        {
+            "activity_id": "tool:persist",
+            "kind": "tool",
+            "label": "open_app",
+            "status": "failed",
+            "request_detail": "token nvapi-1234567890SECRET",
+            "detail": "quota",
+        }
+    ]
+    self_engineering._record_incident_result(
+        state,
+        {
+            "status": "retry_later",
+            "reason": "transient_worker_failure",
+            "activities": ["tool:persist"],
+        },
+        ["tool:persist"],
+        now=1_000.0,
+        retry_rows=rows,
+    )
+
+    path = tmp_path / "state.json"
+    self_engineering._save(path, state)
+    raw = path.read_text(encoding="utf-8")
+    restored = self_engineering._state(path)
+
+    assert "nvapi-1234567890SECRET" not in raw
+    assert "[REDACTED]" in raw
+    assert self_engineering._due_retry_groups(restored, 1_059.0) == []
+    due = self_engineering._due_retry_groups(restored, 1_060.0)
+    assert len(due) == 1
+    group, activity_ids = due[0]
+    assert group[0]["activity_id"] == "tool:persist"
+    assert activity_ids == ["tool:persist"]
+
+
+def test_retry_snapshot_truncation_keeps_complete_activity_id_cleanup() -> None:
+    rows = [
+        {
+            "activity_id": f"tool:{index:02d}",
+            "kind": "tool",
+            "label": "open_app",
+            "status": "failed",
+            "detail": "quota",
+            "updated_at_ns": index,
+        }
+        for index in range(33)
+    ]
+    ids = [row["activity_id"] for row in rows]
+    state = {"bootstrapped": True, "seen": []}
+    result = {
+        "status": "retry_later",
+        "reason": "transient_worker_failure",
+        "activities": ids,
+    }
+
+    self_engineering._record_incident_result(
+        state,
+        result,
+        ids,
+        now=1_000.0,
+        retry_rows=rows,
+    )
+
+    due = self_engineering._due_retry_groups(state, 1_060.0)
+    assert len(due) == 1
+    snapshot, stored_ids = due[0]
+    assert len(snapshot) == 32
+    assert stored_ids == ids
+    owner = state["retries"][ids[0]]["owner"]
+    assert owner in {row["activity_id"] for row in snapshot}
+
+    terminal = self_engineering._record_incident_result(
+        state,
+        {"status": "needs_human", "activities": stored_ids},
+        stored_ids,
+        now=1_060.0,
+    )
+    assert terminal is True
+    assert state["seen"] == ids
+    assert "retries" not in state
+
+
+def test_group_gate_blocks_new_correlated_rows_during_backoff_or_after_terminal() -> None:
+    state = {
+        "retries": {
+            "tool:a": {
+                "attempt": 1,
+                "next_retry_at": 1_060.0,
+                "owner": "tool:a",
+            }
+        }
+    }
+
+    assert self_engineering._group_blocked(
+        state, set(), {"tool:a", "tool:b"}, 1_059.0
+    )
+    assert not self_engineering._group_blocked(
+        state, set(), {"tool:a", "tool:b"}, 1_060.0
+    )
+    assert self_engineering._group_blocked(
+        {}, {"tool:a"}, {"tool:a", "tool:b"}, 2_000.0
+    )
+    assert not self_engineering._group_blocked(
+        {}, {"tool:a"}, {"tool:b"}, 2_000.0
+    )
+
+
+def test_login_config_and_expired_token_errors_are_never_transient() -> None:
+    cases = (
+        "Login timed out",
+        "Error loading config.toml: invalid value for request_timeout",
+        "Token has expired. Please log in and try again.",
+    )
+    assert all(
+        not self_engineering._transient_agent_failure(message)
+        for message in cases
+    )

@@ -39,6 +39,40 @@ BLOCKED = {"AGENTS.md", "CLAUDE.md", "jarvis.toml", "PROJECT.md", "STATE.md",
            "TASKS.md", "DECISIONS.md", "BACKLOG.md", "jarvis/core/config_writer.py"}
 SECRET = re.compile(r"(?i)\b(?:nvapi-|sk-|gh[pousr]_)[A-Za-z0-9_-]{8,}|\bBearer\s+\S+")
 INCIDENT_WINDOW_NS = 30 * 1_000_000_000
+MAX_REWORK_ROUNDS = 3
+RETRY_BACKOFF_SECONDS = (60.0, 300.0, 1800.0)
+_TRANSIENT_AGENT_MARKERS = (
+    "usage limit",
+    "rate limit",
+    "temporarily unavailable",
+    "temporary unavailable",
+    "service temporarily overloaded",
+    "worker local total request limit reached",
+    "resourceexhausted",
+    "resource exhausted",
+    "timed out",
+    "timeout",
+    "connection reset",
+    "connection error",
+    "try again",
+)
+_NON_RETRYABLE_AGENT_MARKERS = (
+    "not connected",
+    "authentication",
+    "unauthorized",
+    "forbidden",
+    "invalid api key",
+    "permission denied",
+    "login",
+    "log in",
+    "sign in",
+    "invalid token",
+    "token has expired",
+    "expired token",
+    "credential",
+    "config",
+    "configuration",
+)
 _INCIDENT_FIELDS = (
     "activity_id", "kind", "label", "status", "trace_id", "project_id",
     "mission_id", "task_id", "worker_id", "run_id", "request_detail", "rationale",
@@ -206,6 +240,192 @@ def verdict(text: str, floor: str) -> tuple[str, str]:
     return v, floor if order[r] < order[floor] else r
 
 
+def _transient_agent_failure(text: str) -> bool:
+    """True only for retryable provider/quota/transport failures."""
+    lowered = text.casefold()
+    if any(marker in lowered for marker in _NON_RETRYABLE_AGENT_MARKERS):
+        return False
+    return any(marker in lowered for marker in _TRANSIENT_AGENT_MARKERS)
+
+
+def _retry_delay(attempt: int) -> float:
+    """Bounded persistent backoff: 1m, 5m, then 30m for later attempts."""
+    index = min(max(1, int(attempt)) - 1, len(RETRY_BACKOFF_SECONDS) - 1)
+    return RETRY_BACKOFF_SECONDS[index]
+
+
+def _retry_ready(state: dict[str, Any], activity_id: str, now: float) -> bool:
+    entry = state.get("retries", {}).get(activity_id)
+    if not isinstance(entry, dict):
+        return True
+    try:
+        return float(entry.get("next_retry_at") or 0.0) <= now
+    except (TypeError, ValueError):  # malformed retry state should fail open and retry now
+        return True
+
+
+def _group_blocked(
+    state: dict[str, Any],
+    seen: set[str],
+    activity_ids: Iterable[str],
+    now: float,
+) -> bool:
+    """True when any correlated activity is already terminal or still in backoff."""
+    return any(
+        activity_id in seen or not _retry_ready(state, activity_id, now)
+        for activity_id in activity_ids
+    )
+
+
+def _retry_rows(rows: Iterable[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """JSON-safe bounded incident rows kept so retries survive HUD eviction."""
+    safe_rows: list[dict[str, Any]] = []
+    for row in rows or ():
+        if not isinstance(row, dict):
+            continue
+        safe: dict[str, Any] = {}
+        for key in _INCIDENT_FIELDS:
+            value = row.get(key)
+            if value in (None, ""):
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                safe[key] = redact(value) if isinstance(value, str) else value
+            else:
+                safe[key] = redact(str(value))
+        if safe.get("activity_id"):
+            safe_rows.append(safe)
+    return safe_rows[:32]
+
+
+def _due_retry_groups(
+    state: dict[str, Any], now: float
+) -> list[tuple[list[dict[str, Any]], list[str]]]:
+    """Return each due retry snapshot plus its complete activity-id set exactly once."""
+    retries = state.get("retries", {})
+    if not isinstance(retries, dict):
+        return []
+    groups: list[tuple[list[dict[str, Any]], list[str]]] = []
+    for activity_id, entry in retries.items():
+        if not isinstance(entry, dict):
+            continue
+        owner = str(entry.get("owner") or activity_id)
+        if activity_id != owner:
+            continue
+        try:
+            due = float(entry.get("next_retry_at") or 0.0) <= now
+        except (TypeError, ValueError):  # corrupt persisted deadline is safest to retry immediately
+            due = True
+        rows = entry.get("rows")
+        if due and isinstance(rows, list):
+            group = [dict(row) for row in rows if isinstance(row, dict)]
+            raw_ids = entry.get("activity_ids")
+            ids = (
+                sorted({str(value) for value in raw_ids if str(value)})
+                if isinstance(raw_ids, list)
+                else sorted(
+                    {
+                        str(row.get("activity_id") or "")
+                        for row in group
+                        if str(row.get("activity_id") or "")
+                    }
+                )
+            )
+            if group and ids:
+                groups.append((group, ids))
+    return groups
+
+
+def _record_incident_result(
+    state: dict[str, Any],
+    result: dict[str, Any],
+    activity_ids: Iterable[str],
+    *,
+    now: float,
+    retry_rows: Iterable[dict[str, Any]] | None = None,
+) -> bool:
+    """Persist one incident result; return True when the incident is terminal."""
+    ids = sorted({str(activity_id) for activity_id in activity_ids if str(activity_id)})
+    retries = state.setdefault("retries", {})
+    if not isinstance(retries, dict):
+        retries = {}
+        state["retries"] = retries
+
+    if result.get("status") == "retry_later":
+        previous = 0
+        for activity_id in ids:
+            entry = retries.get(activity_id)
+            if isinstance(entry, dict):
+                try:
+                    previous = max(previous, int(entry.get("attempt") or 0))
+                except (TypeError, ValueError):  # malformed attempt history safely restarts backoff
+                    pass
+        attempt = previous + 1
+        next_retry_at = now + _retry_delay(attempt)
+        rows = _retry_rows(retry_rows)
+        owner = (
+            str(rows[0].get("activity_id") or "")
+            if rows
+            else (ids[0] if ids else "")
+        )
+        entry: dict[str, Any] = {
+            "attempt": attempt,
+            "next_retry_at": next_retry_at,
+            "owner": owner,
+            "activity_ids": ids,
+        }
+        if rows:
+            entry["rows"] = rows
+        for activity_id in ids:
+            retries[activity_id] = dict(entry)
+        state["last_incident"] = {
+            **result,
+            "retry_attempt": attempt,
+            "next_retry_at": next_retry_at,
+        }
+        return False
+
+    seen = set(state.get("seen", []))
+    seen.update(ids)
+    state["seen"] = sorted(seen)[-500:]
+    for activity_id in ids:
+        retries.pop(activity_id, None)
+    if not retries:
+        state.pop("retries", None)
+    state["last_incident"] = result
+    return True
+
+
+def _discard_unmodified_worktree(repo: Path, worktree: Path, branch: str) -> bool:
+    """Remove a provably clean retry worktree and branch so retries do not leak."""
+    status = _git(worktree, "status", "--porcelain=v1", "--untracked-files=all")
+    if status.returncode:
+        LOG.warning(
+            "refusing transient cleanup because git status failed for %s: %s",
+            worktree,
+            status.stderr[-500:],
+        )
+        return False
+    if status.stdout.strip():
+        return False
+    removed = _git(repo, "worktree", "remove", "--force", str(worktree))
+    if removed.returncode:
+        LOG.warning(
+            "could not remove transient retry worktree %s: %s",
+            worktree,
+            removed.stderr[-500:],
+        )
+        return False
+    deleted = _git(repo, "branch", "-D", branch)
+    if deleted.returncode:
+        LOG.warning(
+            "could not delete transient retry branch %s: %s",
+            branch,
+            deleted.stderr[-500:],
+        )
+        return False
+    return True
+
+
 def _python() -> str:
     """Return console Python even when this sidecar itself was launched by pythonw."""
     exe = Path(sys.executable)
@@ -289,10 +509,35 @@ def _codex(worktree: Path, prompt: str, sandbox: str) -> subprocess.CompletedPro
                 worktree, stdin=prompt, timeout=1200, env=env)
 
 
+def _codex_guarded(
+    worktree: Path, prompt: str, sandbox: str
+) -> subprocess.CompletedProcess[str]:
+    """Convert a CLI wall-clock timeout into a normal transient agent result."""
+    try:
+        return _codex(worktree, prompt, sandbox)
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        stderr = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        detail = f"{stderr}\nCodex request timed out after {exc.timeout}s".strip()
+        return subprocess.CompletedProcess(
+            ["codex", "exec"], 124, stdout, detail
+        )
+
+
 def _changed(worktree: Path) -> list[str]:
-    out = []
-    for args in (("diff", "--name-only"), ("ls-files", "--others", "--exclude-standard")):
-        out += _git(worktree, *args).stdout.splitlines()
+    out: list[str] = []
+    for args in (
+        ("diff", "--name-only"),
+        ("diff", "--cached", "--name-only"),
+        ("ls-files", "--others", "--exclude-standard"),
+    ):
+        run = _git(worktree, *args)
+        if run.returncode:
+            raise RuntimeError(
+                f"git {' '.join(args)} failed while enumerating repair changes: "
+                f"{run.stderr[-500:]}"
+            )
+        out += run.stdout.splitlines()
     return sorted({x.strip().replace("\\", "/") for x in out if x.strip()})
 
 
@@ -454,21 +699,72 @@ def _incident(
         else ""
     )
     logs = _trace_log_evidence(rows, raw_logs)
-    worker = _codex(worktree, _engineer_prompt(context, logs), "workspace-write")
+    worker = _codex_guarded(worktree, _engineer_prompt(context, logs), "workspace-write")
     worker_raw = redact(worker.stdout + worker.stderr)
     (store / "worker.txt").write_text(worker_raw, encoding="utf-8")
     if worker.returncode:
+        changed_on_failure = _changed(worktree)
+        if _transient_agent_failure(worker_raw):
+            if not changed_on_failure:
+                if _discard_unmodified_worktree(repo, worktree, branch):
+                    return {
+                        "status": "retry_later",
+                        "reason": "transient_worker_failure",
+                        "activities": activity_ids,
+                    }
+                return {
+                    "status": "needs_human",
+                    "branch": branch,
+                    "reason": "transient_retry_cleanup_failed",
+                    "activities": activity_ids,
+                }
+            return {
+                "status": "needs_human",
+                "branch": branch,
+                "changed": changed_on_failure,
+                "reason": "repair_pending_transient",
+                "activities": activity_ids,
+            }
+        if changed_on_failure:
+            return {
+                "status": "needs_human",
+                "branch": branch,
+                "changed": changed_on_failure,
+                "reason": "worker_failed_with_patch",
+                "activities": activity_ids,
+            }
         return {"status": "worker_failed", "branch": branch, "activities": activity_ids}
 
     changed = _changed(worktree)
     if not changed:
-        check = _codex(
+        check = _codex_guarded(
             worktree, _no_change_verify_prompt(context, worker_raw), "read-only"
         )
         check_raw = redact(check.stdout + check.stderr)
         (store / "no_change_verifier.txt").write_text(check_raw, encoding="utf-8")
         decision, no_change_risk = verdict(check_raw, "LOW")
-        if check.returncode or decision == "NEEDS_HUMAN":
+        if check.returncode:
+            if _transient_agent_failure(check_raw):
+                if _discard_unmodified_worktree(repo, worktree, branch):
+                    return {
+                        "status": "retry_later",
+                        "reason": "transient_no_change_verifier_failure",
+                        "activities": activity_ids,
+                    }
+                return {
+                    "status": "needs_human",
+                    "branch": branch,
+                    "risk": no_change_risk,
+                    "reason": "transient_retry_cleanup_failed",
+                    "activities": activity_ids,
+                }
+            return {
+                "status": "needs_human",
+                "branch": branch,
+                "risk": no_change_risk,
+                "activities": activity_ids,
+            }
+        if decision == "NEEDS_HUMAN":
             return {
                 "status": "needs_human",
                 "branch": branch,
@@ -483,10 +779,29 @@ def _incident(
                 "activities": activity_ids,
             }
 
-        retry = _codex(worktree, _recheck_prompt(context, check_raw), "workspace-write")
+        retry = _codex_guarded(worktree, _recheck_prompt(context, check_raw), "workspace-write")
         retry_raw = redact(retry.stdout + retry.stderr)
         (store / "worker_recheck.txt").write_text(retry_raw, encoding="utf-8")
         if retry.returncode:
+            changed_after_retry = _changed(worktree)
+            if _transient_agent_failure(retry_raw):
+                if not changed_after_retry and _discard_unmodified_worktree(repo, worktree, branch):
+                    return {
+                        "status": "retry_later",
+                        "reason": "transient_recheck_worker_failure",
+                        "activities": activity_ids,
+                    }
+                return {
+                    "status": "needs_human",
+                    "branch": branch,
+                    "changed": changed_after_retry,
+                    "reason": (
+                        "repair_pending_transient"
+                        if changed_after_retry
+                        else "transient_retry_cleanup_failed"
+                    ),
+                    "activities": activity_ids,
+                }
             return {
                 "status": "worker_failed",
                 "branch": branch,
@@ -513,13 +828,27 @@ def _incident(
             "local_validation": local_validation,
             "activities": activity_ids,
         }
-    check = _codex(
+    check = _codex_guarded(
         worktree, _verify_prompt(context, floor, tests, local_validation), "read-only"
     )
     raw = redact(check.stdout + check.stderr)
     (store / "verifier.txt").write_text(raw, encoding="utf-8")
     decision, final_risk = verdict(raw, floor)
-    if check.returncode or decision == "NEEDS_HUMAN":
+    if check.returncode:
+        return {
+            "status": "needs_human",
+            "branch": branch,
+            "risk": final_risk,
+            "changed": changed,
+            "local_validation": local_validation,
+            "activities": activity_ids,
+            "reason": (
+                "verification_pending_transient"
+                if _transient_agent_failure(raw)
+                else "verifier_failed"
+            ),
+        }
+    if decision == "NEEDS_HUMAN":
         return {
             "status": "needs_human",
             "branch": branch,
@@ -528,19 +857,31 @@ def _incident(
             "local_validation": local_validation,
             "activities": activity_ids,
         }
-    if decision == "FAIL":
+
+    rework_round = 0
+    while decision == "FAIL" and rework_round < MAX_REWORK_ROUNDS:
+        rework_round += 1
         before_rework = _change_fingerprint(worktree, changed)
-        rework = _codex(
+        rework = _codex_guarded(
             worktree, _repair_rework_prompt(context, raw), "workspace-write"
         )
         rework_raw = redact(rework.stdout + rework.stderr)
-        (store / "worker_rework.txt").write_text(rework_raw, encoding="utf-8")
+        (store / f"worker_rework_{rework_round}.txt").write_text(
+            rework_raw, encoding="utf-8"
+        )
         if rework.returncode:
+            revised = _changed(worktree)
             return {
-                "status": "worker_failed",
+                "status": "needs_human" if revised else "worker_failed",
                 "branch": branch,
+                "risk": final_risk,
+                "changed": revised,
                 "activities": activity_ids,
-                "reason": "verifier_rework_failed",
+                "reason": (
+                    "repair_pending_transient"
+                    if _transient_agent_failure(rework_raw)
+                    else "verifier_rework_failed"
+                ),
             }
 
         revised = _changed(worktree)
@@ -559,7 +900,9 @@ def _incident(
         changed = revised
         floor = risk(changed)
         ok, tests, test_output, local_validation = _tests(worktree, changed)
-        (store / "validation_rework.txt").write_text(test_output, encoding="utf-8")
+        (store / f"validation_rework_{rework_round}.txt").write_text(
+            test_output, encoding="utf-8"
+        )
         if not ok:
             return {
                 "status": "validation_failed",
@@ -570,15 +913,17 @@ def _incident(
                 "reason": "rework_validation_failed",
             }
 
-        check = _codex(
+        check = _codex_guarded(
             worktree,
             _verify_prompt(context, floor, tests, local_validation),
             "read-only",
         )
         raw = redact(check.stdout + check.stderr)
-        (store / "verifier_rework.txt").write_text(raw, encoding="utf-8")
+        (store / f"verifier_rework_{rework_round}.txt").write_text(
+            raw, encoding="utf-8"
+        )
         decision, final_risk = verdict(raw, floor)
-        if check.returncode or decision != "PASS":
+        if check.returncode:
             return {
                 "status": "needs_human",
                 "branch": branch,
@@ -586,8 +931,33 @@ def _incident(
                 "changed": changed,
                 "local_validation": local_validation,
                 "activities": activity_ids,
-                "reason": "rework_not_verified",
+                "reason": (
+                    "verification_pending_transient"
+                    if _transient_agent_failure(raw)
+                    else "rework_verifier_failed"
+                ),
             }
+        if decision == "NEEDS_HUMAN":
+            return {
+                "status": "needs_human",
+                "branch": branch,
+                "risk": final_risk,
+                "changed": changed,
+                "local_validation": local_validation,
+                "activities": activity_ids,
+                "reason": "rework_needs_human",
+            }
+
+    if decision != "PASS":
+        return {
+            "status": "needs_human",
+            "branch": branch,
+            "risk": final_risk,
+            "changed": changed,
+            "local_validation": local_validation,
+            "activities": activity_ids,
+            "reason": "max_rework_rounds_exhausted",
+        }
     for path in changed:
         if _git(worktree, "add", "--", path).returncode:
             raise RuntimeError(f"could not stage {path}")
@@ -697,27 +1067,60 @@ def main(argv: list[str] | None = None) -> int:
             state.update(bootstrapped=True, seen=ids); _save(state_path, state)
         else:
             seen = set(state.get("seen", []))
-            for row in rows:
-                aid = str(row["activity_id"])
-                if aid in seen:
-                    continue
-                candidates = [*rows, *active_context.values()]
-                group = related_failures(row, candidates)
-                group_ids = {str(item["activity_id"]) for item in group}
-                seen.update(group_ids)
-                state["seen"] = sorted(seen)[-500:]
-                _save(state_path, state)
+
+            # Retry persisted incidents first. Their original HUD rows may already
+            # have fallen out of recent_outputs, so the state file carries a
+            # bounded, redacted incident snapshot across the backoff window.
+            for group, stored_ids in _due_retry_groups(state, time.time()):
+                group_ids = set(stored_ids)
                 try:
-                    state["last_incident"] = _incident(
-                        repo, data, group, args.auto_merge_low_risk
-                    )
+                    result = _incident(repo, data, group, args.auto_merge_low_risk)
                 except Exception as exc:  # noqa: BLE001 - survive one failed repair
-                    LOG.exception("self-engineering incident failed")
-                    state["last_incident"] = {
+                    LOG.exception("self-engineering retry failed")
+                    result = {
                         "status": "supervisor_failed",
                         "reason": redact(str(exc))[:1200],
                         "activities": sorted(group_ids),
                     }
+                terminal = _record_incident_result(
+                    state,
+                    result,
+                    group_ids,
+                    now=time.time(),
+                    retry_rows=group,
+                )
+                if terminal:
+                    seen.update(group_ids)
+                _save(state_path, state)
+
+            for row in rows:
+                aid = str(row["activity_id"])
+                now = time.time()
+                if aid in seen or not _retry_ready(state, aid, now):
+                    continue
+                candidates = [*rows, *active_context.values()]
+                group = related_failures(row, candidates)
+                group_ids = {str(item["activity_id"]) for item in group}
+                if _group_blocked(state, seen, group_ids, now):
+                    continue
+                try:
+                    result = _incident(repo, data, group, args.auto_merge_low_risk)
+                except Exception as exc:  # noqa: BLE001 - survive one failed repair
+                    LOG.exception("self-engineering incident failed")
+                    result = {
+                        "status": "supervisor_failed",
+                        "reason": redact(str(exc))[:1200],
+                        "activities": sorted(group_ids),
+                    }
+                terminal = _record_incident_result(
+                    state,
+                    result,
+                    group_ids,
+                    now=time.time(),
+                    retry_rows=group,
+                )
+                if terminal:
+                    seen.update(group_ids)
                 _save(state_path, state)
         if args.once: return 0
         time.sleep(args.poll)
