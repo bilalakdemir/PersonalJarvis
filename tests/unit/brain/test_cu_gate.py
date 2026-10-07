@@ -138,6 +138,24 @@ def test_explicit_desktop_ask_allows_computer_use(utterance: str) -> None:
     assert llm_computer_use_allowed(utterance) is True
 
 
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Open report.docx in Word",
+        "Open Notepad and type example.com",
+        "Click Save in report.xlsx",
+    ],
+)
+def test_native_desktop_tasks_remain_computer_use_eligible(utterance: str) -> None:
+    assert llm_computer_use_allowed(utterance) is True
+
+
+def test_exact_website_acceptance_turn_blocks_computer_use() -> None:
+    assert llm_computer_use_allowed(
+        "Open Brave and go to https://example.com. Tell me the page title."
+    ) is False
+
+
 # ── looking is not operating (maintainer mandate 2026-08-02, BUG-124) ─────
 #
 # The user asked "what is on my screen?" and Computer-Use started every time:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+from contextlib import asynccontextmanager
 import json
 import logging
 import os
@@ -488,6 +489,48 @@ class LiveSessions:
         if op == "dialog":
             session.publish({"kind": "dialog_cleared"})
         return result
+
+    @asynccontextmanager
+    async def page_title_run(
+        self,
+        agent: Any,
+        *,
+        chat_session_id: str = "",
+        trace_id: str = "",
+    ):
+        """Own the title operation, including policy and approval waits."""
+        session = await self.ensure(agent)
+        await claim_browser(session, chat_session_id)
+        if session.run_lock.locked() or session.control_owner:
+            raise RuntimeError(_BUSY)
+        async with session.run_lock:
+            session.active_trace = trace_id
+            session.active_chat = chat_session_id
+            try:
+                yield session
+            except BaseException:
+                if not session.closed:
+                    await session.command("cancel", timeout=5)
+                raise
+            finally:
+                session.active_trace = ""
+                session.active_chat = ""
+                if not session.subscribers:
+                    self.release_when_idle(session)
+
+    async def read_page_title(
+        self,
+        agent: Any,
+        *,
+        url: str,
+        chat_session_id: str = "",
+        trace_id: str = "",
+    ) -> dict:
+        """Read one page title inside the managed browser's owned run lifecycle."""
+        async with self.page_title_run(
+            agent, chat_session_id=chat_session_id, trace_id=trace_id
+        ) as session:
+            return await session.command("page_title", {"url": url}, timeout=30)
 
     async def run(
         self,

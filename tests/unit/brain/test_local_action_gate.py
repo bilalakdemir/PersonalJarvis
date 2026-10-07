@@ -10,6 +10,7 @@ from jarvis.brain.local_action_gate import (
     _is_information_question,
     _unsupported_response,
     external_integration_terms,
+    is_managed_browser_turn,
     is_open_app_intent,
     match_local_action,
     requires_external_integration,
@@ -329,6 +330,33 @@ def test_general_desktop_control_routes_to_computer_use(text: str) -> None:
     plan = match_local_action(text, _registry=None)
     assert plan is not None, f"{text!r} fell through to the (tool-less) brain"
     assert plan.mode is LocalActionMode.COMPUTER_USE, f"{text!r} → {plan.mode}, want COMPUTER_USE"
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Open report.docx in Word",
+        "Open Notepad and type example.com",
+        "Open Notepad and type https://example.com",
+        "Open Notepad and type http://example.com",
+        "Computer Use: Open Brave and go to https://example.com. Tell me the page title.",
+        "Click Save in report.xlsx",
+    ],
+)
+def test_native_desktop_tasks_are_not_managed_browser_turns(utterance: str) -> None:
+    assert is_managed_browser_turn(utterance) is False
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Go to example.com and tell me the page title",
+        "Read https://example.com and tell me the page title",
+        "Open Brave and go to https://example.com. Tell me the page title.",
+    ],
+)
+def test_real_website_work_is_managed_browser_turn(utterance: str) -> None:
+    assert is_managed_browser_turn(utterance) is True
 
 
 # ---------------------------------------------------------------------------

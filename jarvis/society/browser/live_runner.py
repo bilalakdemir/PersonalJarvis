@@ -678,6 +678,21 @@ class Worker:
             if self.manual:
                 raise RuntimeError("Return browser control to the agent first")
             return await self.run(args)
+        if op == "page_title":
+            from urllib.parse import urlsplit
+
+            url = str(args.get("url") or "").strip()
+            if urlsplit(url).scheme not in {"http", "https"}:
+                raise ValueError("Only HTTP(S) website addresses are supported")
+            if self.manual or not self.agent_gate.is_set():
+                raise RuntimeError("Return browser control to the agent first")
+            self.step_idle.clear()
+            try:
+                page = await self.focused()
+                await page.goto(url, wait_until="domcontentloaded")
+                return {"title": await page.title(), "url": page.url}
+            finally:
+                self.step_idle.set()
         if op == "shutdown":
             self.closed = True
             return {}
@@ -767,7 +782,8 @@ class Worker:
                     if future and not future.done():
                         future.set_result(msg)
                     continue
-                if msg.get("op") == "run" and self.job and not self.job.done():
+                job_ops = {"run", "page_title"}
+                if msg.get("op") in job_ops and self.job and not self.job.done():
                     emit(
                         "response",
                         id=msg.get("id"),
@@ -778,7 +794,7 @@ class Worker:
                 task = asyncio.create_task(self.dispatch(msg))
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)
-                if msg.get("op") == "run":
+                if msg.get("op") in job_ops:
                     self.job = task
         finally:
             self.closed = True

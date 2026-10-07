@@ -550,22 +550,63 @@ def _query_has_followup_action(query: str) -> bool:
     return bool(_QUERY_FOLLOWUP_ACTION_RE.search(query))
 
 
-def _matches_browser_web_task(normalized: str) -> bool:
-    """Return True when a browser+URL command includes work on that website.
+def is_managed_browser_turn(user_text: str) -> bool:
+    """Website work belongs to society_browser unless Computer Use is named.
 
-    Such turns belong to the router-visible society_browser tool. Returning
-    control to the router keeps website/web-app work inside Jarvis' isolated
-    managed browser instead of driving the user's desktop through screenshots.
+    Shared by the local fast path and both model tool execution boundaries.
+    Pure launches remain deterministic; page work must not start a desktop
+    mission, even when a previous desktop episode is still recent.
     """
-
+    normalized = _normalize(user_text)
+    if re.search(r"\bcomputer[-\s]?use\b", normalized, re.IGNORECASE):
+        return False
     if _OPEN_NEGATION_RE.search(normalized) or _OPEN_INSTRUCTIONAL_RE.search(normalized):
         return False
     match = _OPEN_BROWSER_GOTO_WEB_TASK_RE.match(normalized)
-    if match is None:
+    if match is not None:
+        followup = str(match.group("followup") or "").strip(" \t\r\n.!?,;:-")
+        return bool(_WEB_TASK_FOLLOWUP_RE.search(followup))
+    # A website need not be introduced by opening a named browser, but a dot
+    # alone is not enough: report.docx / report.xlsx and text typed into Notepad
+    # are desktop work, not web targets.
+    # A URL supplied as text is not itself a navigation target. Keep explicit
+    # website context available so typing into a web form still routes here.
+    web_context = re.sub(
+        r"\b(?:type|enter|write|paste|tipp\w*|schreib\w*)\s+[\"']?https?://\S+",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    explicit_web = re.search(
+        r"https?://\S+|\b(?:websites?|webpages?|web\s+pages?|webseite\w*)\b"
+        r"|\b(?:on|in)\s+(?:the\s+)?(?:page|site)\b",
+        web_context,
+    )
+    if explicit_web:
+        return bool(
+            _WEB_TASK_FOLLOWUP_RE.search(normalized)
+            or re.search(_GOTO_VERBS, normalized, re.IGNORECASE)
+        )
+
+    # For a bare domain, bind the navigation verb to that target instead of
+    # accepting any unrelated "open" earlier in the sentence.
+    bare_goto = re.search(
+        r"\b" + _GOTO_VERBS
+        + r"\s+(?P<host>[\w-]+(?:\.[\w-]+)+)(?:/\S*)?",
+        normalized,
+        re.IGNORECASE,
+    )
+    if bare_goto is None:
         return False
-    followup = str(match.group("followup") or "").strip(" \t\r\n.!?,;:-")
-    followup = re.sub(r"^(?:and|und|then|dann)\b\s*", "", followup, flags=re.IGNORECASE)
-    return bool(_WEB_TASK_FOLLOWUP_RE.search(followup))
+    host = str(bare_goto.group("host") or "")
+    suffix = host.rsplit(".", 1)[-1].lower()
+    if suffix in {
+        "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pdf", "txt", "rtf",
+        "csv", "tsv", "md", "json", "toml", "yaml", "yml", "xml", "py",
+        "js", "ts", "tsx", "jsx", "html", "htm", "css", "log", "zip",
+    }:
+        return False
+    return bool(_WEB_TASK_FOLLOWUP_RE.search(normalized[bare_goto.end():]))
 
 
 def _match_browser_url_fast_path(normalized: str) -> LocalActionPlan | None:
@@ -1033,7 +1074,7 @@ def match_local_action(
     # isolated society_browser tool. Without this guard the broad compound-open
     # matcher below sent "Open Brave ... tell me the page title" into screenshot
     # Computer-Use and stalled on desktop clicks.
-    if _matches_browser_web_task(normalized):
+    if is_managed_browser_turn(normalized):
         return None
 
     if _matches_visual_target(normalized):

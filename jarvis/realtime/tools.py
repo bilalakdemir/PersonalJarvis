@@ -13,9 +13,10 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 from jarvis.brain.cu_gate import (
-    CU_BLOCKED_MODEL_FEEDBACK,
+    cu_blocked_feedback,
     CU_VEHICLE_TOOL_NAMES,
     llm_computer_use_allowed,
+    website_vehicle_blocked,
 )
 from jarvis.brain.spawn_gate import (
     SPAWN_VEHICLE_TOOL_NAMES,
@@ -1092,15 +1093,15 @@ class RealtimeToolBridge:
             # "0 running · 0 in total" while the user asked three times.
             # Naming the vehicle IS the order; nothing weaker may veto it.
             return ""
-        elif name in CU_VEHICLE_TOOL_NAMES and not llm_computer_use_allowed(
-            user_text
+        elif website_vehicle_blocked(name, user_text) or (
+            name in CU_VEHICLE_TOOL_NAMES and not llm_computer_use_allowed(user_text)
         ):
             # Explicit-desktop gate (live incident 2026-07-21 11:36): a pure
             # knowledge question must never be answered by driving the user's
             # browser. computer_use runs ONLY when the spoken turn asks for an
             # on-screen action or a desktop episode is already in progress.
             # See jarvis/brain/cu_gate.py.
-            message = CU_BLOCKED_MODEL_FEEDBACK
+            message = cu_blocked_feedback(user_text)
         elif _should_block_action_as_research(
             descriptor,
             name,

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,83 @@ from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from jarvis.core.protocols import BrainMessage, BrainRequest, ImageBlock, ToolResult
+
+log = logging.getLogger(__name__)
+
+
+_BROWSER_CAPACITY_MARKER = "worker local total request limit reached"
+_BROWSER_CAPACITY_RETRY_DELAYS_S: tuple[float, ...] = (1.0, 2.0)
+
+
+def _is_transient_browser_capacity_error(provider: str, exc: Exception) -> bool:
+    """Only the known NVIDIA NIM worker-pool saturation is retryable here.
+
+    ResourceExhausted is intentionally not enough by itself: quota, auth and
+    billing failures must surface immediately instead of being hammered.
+    """
+    return (
+        (provider or "").strip().lower() == "nvidia"
+        and _BROWSER_CAPACITY_MARKER in str(exc).lower()
+    )
+
+
+async def _complete_with_capacity_retry(
+    brain: Any,
+    request: BrainRequest,
+    *,
+    provider: str,
+    overrides: dict[str, str],
+) -> tuple[str, dict]:
+    """Stream one browser inference call with a tiny saturation-only retry budget."""
+    from jarvis.core.config import override_provider_secrets
+
+    for attempt in range(len(_BROWSER_CAPACITY_RETRY_DELAYS_S) + 1):
+        text = ""
+        usage: dict = {}
+        try:
+            with override_provider_secrets(overrides):
+                async for delta in brain.complete(request):
+                    text += delta.content or ""
+                    if delta.usage:
+                        usage = delta.usage
+            return text, usage
+        except Exception as exc:
+            if (
+                attempt >= len(_BROWSER_CAPACITY_RETRY_DELAYS_S)
+                or not _is_transient_browser_capacity_error(provider, exc)
+            ):
+                raise
+            delay_s = _BROWSER_CAPACITY_RETRY_DELAYS_S[attempt]
+            log.warning(
+                "society browser: NVIDIA worker pool saturated; retrying inference "
+                "in %.1fs (%d/%d)",
+                delay_s,
+                attempt + 1,
+                len(_BROWSER_CAPACITY_RETRY_DELAYS_S),
+            )
+            await asyncio.sleep(delay_s)
+
+    raise RuntimeError("browser capacity retry loop exhausted unexpectedly")
+
+
+def _is_simple_page_title_request(task: str, url: str) -> bool:
+    """Recognize a narrow read-only title request with an explicit HTTP(S) URL."""
+    if urlsplit((url or "").strip()).scheme not in {"http", "https"}:
+        return False
+    normalized = " ".join((task or "").split())
+    target = re.escape(url.strip())
+    title = r"(?:tell\s+me|read|return|show\s+me|get)\s+(?:the\s+)?page\s+title"
+    navigation = (
+        r"(?:(?:open|start|launch)\s+(?:brave|chrome|firefox|edge|opera|safari|"
+        r"chromium|vivaldi|the\s+browser)\s+and\s+)?"
+        r"(?:go\s+to|navigate\s+to|open)\s+" + target
+    )
+    return bool(re.fullmatch(
+        rf"(?:{navigation}(?:\.\s*|\s+and\s+){title}|"
+        rf"{title}(?:\s+(?:of|for|on)\s+{target})?)[.!?]?",
+        normalized,
+        re.IGNORECASE,
+    ))
 
 
 def brain_messages(rows: list[dict[str, Any]]) -> tuple[BrainMessage, ...]:
@@ -59,11 +138,15 @@ class ApprovedBrowserAction:
         )
 
 
-async def wait_for_browser_approval(runtime: Any, approval_id: str, session: Any) -> bool:
+async def wait_for_browser_approval(
+    runtime: Any, approval_id: str, session: Any, *, is_stopped: Any = None
+) -> bool:
     """A one-shot approval belongs to this task and is cancelled with it."""
     try:
         async with asyncio.timeout(600):
             while True:
+                if is_stopped is not None and is_stopped():
+                    return False
                 row = await runtime.approvals.get(approval_id)
                 if row and str(row.state) == "approved":
                     return True
@@ -102,8 +185,135 @@ async def execute_live(
     )
     if (caller.agent_id, turn_trace) in live.stopped_turns:
         return ToolResult(False, None, stopped_message)
+
+    task = str(args.get("task") or "").strip()
+    start_url = str(args.get("url") or "").strip()
     executor = live.executor() if callable(live.executor) else live.executor
-    if live.model_resolver is None or executor is None:
+    if executor is None:
+        return ToolResult(False, None, "Browser action service is not ready")
+
+    # Page-title reads do not need a planning model. Keep this shortcut narrow:
+    # owned/isolated profile only, no domain allowlist semantics to bypass, and
+    # all kill-switch/grant/approval/executor checks remain in force.
+    if (
+        _is_simple_page_title_request(task, start_url)
+        and str(getattr(caller, "browser_mode", "own")) == "own"
+        and not list(getattr(caller, "browser_allowed_domains", []) or [])
+    ):
+        def is_stopped() -> bool:
+            return (caller.agent_id, turn_trace) in live.stopped_turns
+
+        async def navigation_authorization() -> tuple[Verdict, str | None]:
+            if is_stopped() or await runtime.store.kill_switch():
+                return Verdict.BLOCK, "Browser action cancelled or denied"
+            current = await runtime.roster.get(caller.agent_id)
+            if current is None or str(current.state) != "active":
+                return Verdict.BLOCK, "Agent is not active"
+            if str(getattr(current, "browser_mode", "own")) != "own" or list(
+                getattr(current, "browser_allowed_domains", []) or []
+            ):
+                return Verdict.BLOCK, "Page-title shortcut blocked by current browser policy"
+            if "core:browser" in current.denies or (
+                str(current.grant_mode) == "allowlist" and "core:browser" not in current.grants
+            ):
+                return Verdict.BLOCK, "Browser access is not granted"
+            verdict = decide(
+                current, "core:browser", "safe" if read_only else "monitor", verb="navigate"
+            )
+            error = "Browser action blocked by agent policy" if verdict is Verdict.BLOCK else None
+            return verdict, error
+
+        verdict, error = await navigation_authorization()
+        if error:
+            return ToolResult(False, None, error)
+
+        async with live.page_title_run(
+            caller, chat_session_id=chat_session_id, trace_id=turn_trace
+        ) as session:
+            if is_stopped():
+                return ToolResult(False, None, stopped_message)
+
+            async def approve_navigation() -> bool:
+                approval = await runtime.approvals.enqueue(
+                    agent_id=caller.agent_id,
+                    trace_id=turn_trace,
+                    capability="core:browser",
+                    action={
+                        "action": {"navigate": {"url": start_url}},
+                        "resume_in_place": True,
+                    },
+                    summary=f"Browser: navigate on {start_url}"[:300],
+                )
+                if session:
+                    session.publish({"kind": "approval", "id": approval.id, "action": "navigate"})
+                if not await wait_for_browser_approval(
+                    runtime, approval.id, session, is_stopped=is_stopped
+                ) or is_stopped():
+                    live.stop_turn(caller.agent_id, turn_trace)
+                    return False
+                return True
+
+            approved = False
+            if verdict is Verdict.QUEUE:
+                approved = await approve_navigation()
+                if not approved:
+                    return ToolResult(False, None, stopped_message)
+
+            async def apply_title() -> dict:
+                nonlocal approved
+                # Browser acquisition, approval and executor waits can outlive a grant.
+                while True:
+                    current_verdict, error = await navigation_authorization()
+                    if error:
+                        return {"error": error}
+                    if current_verdict is not Verdict.QUEUE or approved:
+                        break
+                    approved = await approve_navigation()
+                    if not approved:
+                        return {"error": stopped_message}
+                if is_stopped():
+                    return {"error": stopped_message}
+                try:
+                    return await session.command("page_title", {"url": start_url}, timeout=30)
+                except Exception:
+                    # The executor can consume this error before the run context sees it.
+                    # Stop the worker while we still own its lifecycle.
+                    try:
+                        await session.command("cancel", timeout=5)
+                    except Exception:
+                        log.warning("society browser: page-title cancellation failed", exc_info=True)
+                    raise
+
+            trace = getattr(ctx, "trace_id", uuid4())
+            action_result = await executor.execute(
+                ApprovedBrowserAction(apply_title, read_only=read_only),
+                {"action": {"page_title": {"url": start_url}}},
+                user_utterance=getattr(ctx, "user_utterance", ""),
+                trace_id=trace if isinstance(trace, UUID) else uuid4(),
+                config_snapshot=getattr(ctx, "config", {}),
+            )
+            if not action_result.success:
+                return ToolResult(False, action_result.output, action_result.error)
+            observed = action_result.output if isinstance(action_result.output, dict) else {}
+            title = str(observed.get("title") or "").strip()
+            final_url = str(observed.get("url") or start_url)
+            if not title:
+                return ToolResult(False, observed, "Page title was empty")
+            return ToolResult(
+                True,
+                {
+                    "ok": True,
+                    "final_result": title,
+                    "title": title,
+                    "urls": [final_url],
+                    "steps": 1,
+                    "usage": {"input_tokens": 0, "output_tokens": 0, "cache_hit_tokens": 0},
+                    "provider": "deterministic-dom",
+                    "model": "none",
+                },
+            )
+
+    if live.model_resolver is None:
         return ToolResult(False, None, "Browser model service is not ready")
     provider = caller.provider or _default_provider(runtime)
     key = get_jarvis_agent_secret(provider)
@@ -154,11 +364,9 @@ async def execute_live(
                     + "\nImages are unavailable; use the DOM observation.",
                 )
             try:
-                with override_provider_secrets(overrides):
-                    async for delta in brain.complete(request):
-                        text += delta.content or ""
-                        if delta.usage:
-                            usage = delta.usage
+                text, usage = await _complete_with_capacity_retry(
+                    brain, request, provider=provider, overrides=overrides
+                )
                 break
             except Exception as exc:
                 detail = str(exc).lower()
@@ -274,7 +482,6 @@ async def execute_live(
         )
         return {"ok": result.success, "error": result.error}
 
-    task = str(args.get("task") or "").strip()
     if read_only:
         task = (
             "READ-ONLY: use navigation, reading and extraction only; "
