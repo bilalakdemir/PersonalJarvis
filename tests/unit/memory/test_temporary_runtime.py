@@ -66,6 +66,41 @@ async def test_direct_chat_only(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_real_chat_completion_contract(tmp_path):
+    """Test the exact immutable completion type emitted by the chat service."""
+    from jarvis.core.chat_turn import ChatCompletion, ChatTurn
+
+    capture = TemporaryConversationCapture(tmp_path / "jarvis.db")
+    set_running_capture(capture)
+    turn = ChatTurn(
+        session_id="synthetic-session",
+        turn_id="synthetic-turn",
+        user_text="Synthetic milestone is Thursday",
+        direct_user=True,
+        trace_id="synthetic-trace",
+    )
+    completion = ChatCompletion(
+        turn,
+        json.dumps([
+            {"kind": "user_message", "payload": {"typed": turn.user_text}},
+            {"kind": "assistant_text", "payload": {"text": "Milestone noted."}},
+        ]),
+    )
+    try:
+        await capture_chat_completion(SimpleNamespace(session_id=turn.session_id), completion)
+        items = await capture.store.due_for_review(within_hours=24 * 30)
+        assert len(items) == 1
+        envelope = json.loads(items[0].content)
+        assert envelope["user"] == turn.user_text
+        assert envelope["session_id"] == turn.session_id
+        assert envelope["turn_id"] == turn.turn_id
+        assert items[0].promotion_state == "unreviewed"
+        assert items[0].expires_ms > items[0].created_ms
+    finally:
+        await capture.close()
+
+
+@pytest.mark.asyncio
 async def test_secret_not_written(tmp_path):
     capture = TemporaryConversationCapture(tmp_path / "jarvis.db")
     try:
