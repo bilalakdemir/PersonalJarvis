@@ -235,3 +235,24 @@ def test_supervisor_starts_missing_self_engineering_on_first_loop(
 
     assert result == 0
     assert calls == ["missing"]
+
+
+def test_terminate_supervisor_tree_stops_all_detected_supervisor_processes(
+    monkeypatch,
+) -> None:
+    root = _Proc(40)
+    child = _Proc(41)
+    root._children = [child]
+    monkeypatch.setattr(supervisor, "supervisor_processes", lambda: [root])
+    monkeypatch.setattr(
+        supervisor.psutil,
+        "wait_procs",
+        lambda targets, timeout: (targets, []),
+    )
+    monkeypatch.setattr(supervisor, "_append_log", lambda message: None)
+
+    count = supervisor.terminate_supervisor_tree()
+
+    assert count == 2
+    assert root.terminated is True
+    assert child.terminated is True

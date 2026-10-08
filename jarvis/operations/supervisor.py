@@ -209,8 +209,7 @@ def start_self_engineering(
     _spawn(root, argv)
 
 
-def terminate_desktop_tree() -> int:
-    roots = desktop_processes()
+def _terminate_process_tree(roots: list[psutil.Process]) -> int:
     if not roots:
         return 0
     descendants: dict[int, psutil.Process] = {}
@@ -218,7 +217,7 @@ def terminate_desktop_tree() -> int:
         try:
             for child in proc.children(recursive=True):
                 descendants[child.pid] = child
-        except (psutil.NoSuchProcess, psutil.AccessDenied):  # A disappearing child is already cleaned up.
+        except (psutil.NoSuchProcess, psutil.AccessDenied):  # A disappearing child is already stopped.
             continue
     targets_by_pid = {proc.pid: proc for proc in roots}
     targets_by_pid.update(descendants)
@@ -226,16 +225,30 @@ def terminate_desktop_tree() -> int:
     for proc in targets:
         try:
             proc.terminate()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):  # Exit during terminate is the desired outcome.
+        except (psutil.NoSuchProcess, psutil.AccessDenied):  # A disappearing child is already stopped.
             continue
     _, alive = psutil.wait_procs(targets, timeout=4.0)
     for proc in alive:
         try:
             proc.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):  # Exit before kill is already success.
+        except (psutil.NoSuchProcess, psutil.AccessDenied):  # A disappearing child is already stopped.
             continue
-    _append_log(f"terminated stale desktop processes={len(targets)}")
     return len(targets)
+
+
+def terminate_desktop_tree() -> int:
+    count = _terminate_process_tree(desktop_processes())
+    if count:
+        _append_log(f"terminated stale desktop processes={count}")
+    return count
+
+
+def terminate_supervisor_tree() -> int:
+    """Stop recovery for an explicit user Quit; login startup remains installed."""
+    count = _terminate_process_tree(supervisor_processes())
+    if count:
+        _append_log(f"terminated supervisor processes={count}")
+    return count
 
 
 def _pid_list(items: list[psutil.Process]) -> list[int]:

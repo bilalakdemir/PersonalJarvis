@@ -94,9 +94,11 @@ def test_audio_devices_puts_picked_devices(monkeypatch):
     assert "input_device" not in str(seen["body"])
 
 
-def test_status_reports_operations_layer(monkeypatch) -> None:
+def test_status_reports_operations_layer(mock_api, monkeypatch) -> None:
     import jarvis.operations.supervisor as supervisor
 
+    monkeypatch.setenv("JARVISCTL_CONTROL_KEY", "jctl_x")
+    mock_api[("GET", "/api/control/auth/probe")] = (200, {"ok": True})
     monkeypatch.setattr(
         supervisor,
         "operational_status",
@@ -126,11 +128,14 @@ def test_status_reports_operations_layer(monkeypatch) -> None:
     assert '"supervisor"' in res.stdout
     assert '"self_engineering"' in res.stdout
     assert '"startup"' in res.stdout
+    assert '"operations_scope": "local"' in res.stdout
 
 
-def test_status_exits_nonzero_when_runtime_is_unreachable(monkeypatch) -> None:
+def test_status_exits_nonzero_when_target_is_unreachable(mock_api, monkeypatch) -> None:
     import jarvis.operations.supervisor as supervisor
 
+    monkeypatch.setenv("JARVISCTL_CONTROL_KEY", "jctl_x")
+    mock_api[("GET", "/api/control/auth/probe")] = (503, {"detail": "offline"})
     monkeypatch.setattr(
         supervisor,
         "operational_status",
