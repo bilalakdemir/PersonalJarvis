@@ -1,5 +1,25 @@
 # OS Feature Parity — macOS / Linux Gap Register
 
+## AERION Operations Layer v1 (2026-10-08, T2)
+
+Windows gains a repo-owned lifecycle supervisor
+(`jarvis/operations/supervisor.py`) plus a per-user Startup shortcut manager.
+The supervisor keeps the default desktop runtime and self-engineering sidecar
+alive, waits for the existing relauncher during explicit desktop restarts,
+reaps stale desktop process trees after repeated health failures, and records a
+durable per-user log. The tray exposes Open AERION, Restart AERION and
+Diagnostics; restart still uses the existing explicit desktop restart path and
+does not weaken the CLI/API restart boundary.
+
+macOS and Linux keep their existing app lifecycle and autostart implementations.
+The new supervisor module imports there, but Windows login installation reports
+unsupported and does not create native startup state. Unit evidence covers the
+supervisor lifecycle seams, Windows shortcut matching/migration, tray labels,
+CLI status, and the existing Windows autostart contracts. Live Windows acceptance verified default-desktop recovery, self-engineering
+recovery, and singleton rejection of a duplicate supervisor launch. The
+post-merge migration still verifies the installed Startup shortcut by launching
+that exact entry before the temporary AppData supervisor is removed.
+
 ## Persistent Agentic IDE terminals (2026-09-28, T3)
 
 Coding-agent panes now live in a separate PTY host process

@@ -233,7 +233,7 @@ _Generated from the curated command tree by `scripts/ci/gen_cli_reference.py` �
 
 - `jarvis system audio-devices --output --input` — List audio devices, or pick where the voice plays / which mic listens.
 - `jarvis system restart --force --yes --dry-run` — Refuse a CLI restart; use the desktop UI's explicit Restart action.
-- `jarvis system status` — Report server reachability + version (GET /api/control/auth/probe).
+- `jarvis system status` — Report target reachability plus local AERION operations status.
 
 ## tasks
 

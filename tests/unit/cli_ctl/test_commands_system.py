@@ -92,3 +92,69 @@ def test_audio_devices_puts_picked_devices(monkeypatch):
     assert seen["path"] == "/api/settings/audio-devices"
     assert "PRO X Gaming Headset" in str(seen["body"])
     assert "input_device" not in str(seen["body"])
+
+
+def test_status_reports_operations_layer(mock_api, monkeypatch) -> None:
+    import jarvis.operations.supervisor as supervisor
+
+    monkeypatch.setenv("JARVISCTL_CONTROL_KEY", "jctl_x")
+    mock_api[("GET", "/api/control/auth/probe")] = (200, {"ok": True})
+    monkeypatch.setattr(
+        supervisor,
+        "operational_status",
+        lambda: {
+            "reachable": True,
+            "runtime": {"healthy": True, "pids": [101], "health": {"ok": True}},
+            "supervisor": {
+                "running": True,
+                "pids": [202],
+                "log_path": "supervisor.log",
+            },
+            "self_engineering": {"running": True, "pids": [303]},
+            "startup": {
+                "supported": True,
+                "installed": True,
+                "matches": True,
+                "entry_path": "startup.lnk",
+                "detail": "ok",
+            },
+        },
+    )
+
+    res = runner.invoke(app, ["--json", "system", "status"])
+
+    assert res.exit_code == 0
+    assert '"reachable": true' in res.stdout.lower()
+    assert '"supervisor"' in res.stdout
+    assert '"self_engineering"' in res.stdout
+    assert '"startup"' in res.stdout
+    assert '"operations_scope": "local"' in res.stdout
+
+
+def test_status_exits_nonzero_when_target_is_unreachable(mock_api, monkeypatch) -> None:
+    import jarvis.operations.supervisor as supervisor
+
+    monkeypatch.setenv("JARVISCTL_CONTROL_KEY", "jctl_x")
+    mock_api[("GET", "/api/control/auth/probe")] = (503, {"detail": "offline"})
+    monkeypatch.setattr(
+        supervisor,
+        "operational_status",
+        lambda: {
+            "reachable": False,
+            "runtime": {"healthy": False, "pids": [], "health": {}},
+            "supervisor": {"running": True, "pids": [202], "log_path": "x"},
+            "self_engineering": {"running": True, "pids": [303]},
+            "startup": {
+                "supported": True,
+                "installed": True,
+                "matches": True,
+                "entry_path": "startup.lnk",
+                "detail": "ok",
+            },
+        },
+    )
+
+    res = runner.invoke(app, ["--json", "system", "status"])
+
+    assert res.exit_code == 1
+    assert '"reachable": false' in res.stdout.lower()

@@ -5852,6 +5852,15 @@ class DesktopApp:
                     # otherwise. This bridge thread is non-MainThread, which is
                     # exactly what pywebview's runtime create requires.
                     self._ensure_main_window()
+                elif action == "restart":
+                    scheduled = self.request_restart()
+                    if not scheduled:
+                        logger.warning("Tray restart request could not be scheduled.")
+                elif action == "diagnostics":
+                    from jarvis.operations.supervisor import open_diagnostics
+
+                    if not open_diagnostics():
+                        logger.warning("Tray diagnostics could not open the supervisor log.")
                 elif action == "kill":
                     # Emergency stop (deep-dive 2026-07-15, C-02): this arm was
                     # missing entirely — the advertised tray "Emergency stop"
@@ -5860,6 +5869,9 @@ class DesktopApp:
                     # bound to) from this non-async pystray bridge thread.
                     self._publish_kill_requested_threadsafe()
                 elif action == "quit":
+                    from jarvis.operations.supervisor import terminate_supervisor_tree
+
+                    terminate_supervisor_tree()
                     self._user_requested_quit = True
                     self._arm_force_exit(after_s=20.0)
                     # Detached windows too: webview.start() returns only once
