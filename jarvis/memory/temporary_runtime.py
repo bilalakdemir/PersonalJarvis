@@ -145,6 +145,7 @@ async def review_expiring(item: TemporaryMemoryItem) -> str | None:
         session_id = str(envelope["session_id"])
         turn_id = str(envelope["turn_id"])
     except (ValueError, TypeError, KeyError):
+        log.warning("temporary expiry review cannot decode item %s", item.id, exc_info=True)
         return "temporary"
 
     from jarvis.memory.wiki.integration import get_running_capture_runtime
