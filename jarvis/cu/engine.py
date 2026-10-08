@@ -354,6 +354,47 @@ async def _publish_observation(bus: Any, frame: Frame, window_title: str) -> Non
         log.debug("ObservationCaptured publish failed", exc_info=True)
 
 
+def _is_simple_open_app_goal(goal: str, app_name: str) -> bool:
+    """True only for a launch-only app goal with no follow-up work."""
+    goal_norm = " ".join((goal or "").strip().rstrip(".!?").casefold().split())
+    app_norm = " ".join((app_name or "").strip().casefold().split())
+    if not goal_norm or not app_norm:
+        return False
+    if goal_norm in {
+        f"open {app_norm}",
+        f"launch {app_norm}",
+        f"start {app_norm}",
+        f"{app_norm} a\u00e7",
+    }:
+        return True
+    if goal_norm.endswith(" a\u00e7") and goal_norm.startswith(app_norm):
+        suffix = goal_norm[len(app_norm):-len(" a\u00e7")].strip()
+        return suffix in {
+            "",
+            "'i",
+            "'\u0131",
+            "'u",
+            "'\u00fc",
+            "i",
+            "\u0131",
+            "u",
+            "\u00fc",
+        }
+    return False
+
+
+async def _locally_verify_open_app(app_name: str) -> bool:
+    """Confirm the requested app has a live window; never raises."""
+    try:
+        from jarvis.platform import window_state  # noqa: PLC0415
+
+        running = await asyncio.to_thread(window_state.is_app_running, app_name)
+        return running is not None
+    except Exception:  # noqa: BLE001
+        log.debug("[cu] local open_app verification failed", exc_info=True)
+        return False
+
+
 def _foreground_title() -> str:
     try:
         from jarvis.platform import window_state  # noqa: PLC0415
@@ -1712,6 +1753,19 @@ async def run_cu_loop(
                         timeout_s=1.0 * settle_scale,
                     )
                 profiler.add("act", t0, step_idx)
+                if (
+                    ok
+                    and _is_simple_open_app_goal(goal, str(action["name"]))
+                    and await _locally_verify_open_app(str(action["name"]))
+                ):
+                    yield _final(
+                        stdout=(
+                            f"[cu] done (locally verified: "
+                            f"{action['name']} is running)\n"
+                        ),
+                        exit_code=_EXIT_OK,
+                    )
+                    return
 
             elif kind == "switch_window":
                 ok, detail = await _dispatch_tool(

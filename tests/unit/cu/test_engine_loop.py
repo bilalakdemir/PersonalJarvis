@@ -1099,3 +1099,43 @@ async def test_a_screen_that_stays_unreadable_still_fails(patched, monkeypatch):
     final = _final(chunks)
     assert final.exit_code == 1
     assert "cannot see the screen" in final.stderr
+
+
+def test_simple_open_app_goal_detection_is_narrow() -> None:
+    assert engine_mod._is_simple_open_app_goal("Open Notepad.", "Notepad")
+    assert engine_mod._is_simple_open_app_goal("Notepad'i a\u00e7", "Notepad")
+    assert not engine_mod._is_simple_open_app_goal(
+        "Open Notepad and type hello",
+        "Notepad",
+    )
+
+
+@pytest.mark.asyncio
+async def test_simple_open_app_finishes_on_local_running_app(
+    patched, monkeypatch,
+) -> None:
+    from jarvis.platform import window_state as ws
+
+    monkeypatch.setattr(
+        ws,
+        "is_app_running",
+        lambda name: ws.WindowInfo(str(name), handle=22),
+    )
+    brain = FakeBrain(['{"action":"open_app","name":"Notepad"}'])
+    executor = FakeExecutor()
+    task = SimpleNamespace(prompt="Open Notepad.", env={}, timeout_s=60)
+
+    chunks = [
+        chunk
+        async for chunk in engine_mod.run_cu_loop(
+            task,
+            _ctx(brain, executor),
+            cancel_token=None,
+        )
+    ]
+
+    final = _final(chunks)
+    assert final.exit_code == 0
+    assert "Notepad is running" in final.stdout
+    assert executor.calls == [("open_app", {"app_name": "Notepad"})]
+    assert len(brain.calls) == 1
