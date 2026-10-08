@@ -1097,7 +1097,7 @@ _OPEN_APP_SETTLE_TIMEOUT_S = 3.0
 _OPEN_APP_SETTLE_POLL_S = 0.3
 
 
-async def _settle_after_open_app(ctx: ComputerUseContext, app_token: str) -> None:
+async def _settle_after_open_app(ctx: ComputerUseContext, app_token: str) -> bool:
     """Wait (max ``_OPEN_APP_SETTLE_TIMEOUT_S``) until the freshly launched
     app's window is in the foreground.
 
@@ -1107,27 +1107,27 @@ async def _settle_after_open_app(ctx: ComputerUseContext, app_token: str) -> Non
     fakes without it (and engines on platforms whose probe returns "") cost
     one short settle beat at most. Never raises."""
     if not app_token:
-        return
+        return False
     probe = getattr(
         getattr(ctx, "vision_engine", None), "_guess_active_app_hint", None,
     )
     if probe is None:
-        return
+        return False
     deadline = time.monotonic() + _OPEN_APP_SETTLE_TIMEOUT_S
     while time.monotonic() < deadline:
         try:
             title = str(await asyncio.to_thread(probe, None) or "")
         except Exception:  # noqa: BLE001
             log.debug("[cu] settle probe failed (non-fatal)", exc_info=True)
-            return
+            return False
         if not title:
             # No title available (empty desktop focus, or a platform whose
             # probe returns "") — one fixed settle beat instead of a blind
             # poll-until-timeout.
             await asyncio.sleep(min(1.0, _OPEN_APP_SETTLE_TIMEOUT_S / 3))
-            return
+            return False
         if app_token in title.lower():
-            return
+            return True
         await asyncio.sleep(_OPEN_APP_SETTLE_POLL_S)
 
     # Timed out — the app never reached the foreground on its own. In the happy
@@ -1138,8 +1138,11 @@ async def _settle_after_open_app(ctx: ComputerUseContext, app_token: str) -> Non
     # ONLY on this unhappy path, so it never double-fires. Never raises.
     try:
         await asyncio.to_thread(window_state.focus_window, app_token)
+        title = str(await asyncio.to_thread(probe, None) or "")
+        return bool(title and app_token in title.lower())
     except Exception:  # noqa: BLE001
         log.debug("[cu] settle fallback focus failed (non-fatal)", exc_info=True)
+        return False
 
 
 async def _profile_phase(
@@ -2072,6 +2075,8 @@ _OPEN_GOAL_RE = re.compile(
 
 def _open_goal_app_token(task_prompt: str) -> str | None:
     """The app name when the WHOLE goal is just "open <app>", else ``None``."""
+    if _goal_needs_plan(task_prompt):
+        return None
     m = _OPEN_GOAL_RE.match((task_prompt or "").strip())
     if not m:
         return None
@@ -5279,8 +5284,9 @@ async def _run_screenshot_loop(
             # observing immediately wastes a full think round on the stale
             # pre-launch frame (latency plan Task 6).
             if action == "open_app":
-                await _settle_after_open_app(
-                    ctx, str(action_obj.get("name", "")).strip().lower(),
+                _opened_app = str(action_obj.get("name", "")).strip()
+                _opened_foreground = await _settle_after_open_app(
+                    ctx, _opened_app.lower(),
                 )
                 # G8c Part 1: a MID-mission launch can land on a SECONDARY monitor
                 # — the mission-start ensure-on-primary ran before this app even
@@ -5299,6 +5305,23 @@ async def _run_screenshot_loop(
                     log.debug(
                         "[cu] G8 re-ensure after open_app failed", exc_info=True,
                     )
+
+                _requested_app = _open_goal_app_token(task_prompt)
+                if (
+                    _opened_foreground
+                    and _requested_app
+                    and _requested_app == _opened_app.strip().lower()
+                ):
+                    log.info(
+                        "[cu] %s pure launch goal satisfied by verified open_app %r",
+                        tag,
+                        _opened_app,
+                    )
+                    yield _final(
+                        stdout=f"[cu] opened {_opened_app} at {tag}\n",
+                        exit_code=0,
+                    )
+                    return
             # Remember the last state-changing action for the next turn's
             # VERIFY FIRST directive (wait is a pure pause, never state).
             if action != "wait":
