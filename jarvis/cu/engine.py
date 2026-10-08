@@ -383,18 +383,6 @@ def _is_simple_open_app_goal(goal: str, app_name: str) -> bool:
     return False
 
 
-async def _locally_verify_open_app(app_name: str) -> bool:
-    """Confirm the requested app has a live window; never raises."""
-    try:
-        from jarvis.platform import window_state  # noqa: PLC0415
-
-        running = await asyncio.to_thread(window_state.is_app_running, app_name)
-        return running is not None
-    except Exception:  # noqa: BLE001
-        log.debug("[cu] local open_app verification failed", exc_info=True)
-        return False
-
-
 def _foreground_title() -> str:
     try:
         from jarvis.platform import window_state  # noqa: PLC0415
@@ -1753,15 +1741,13 @@ async def run_cu_loop(
                         timeout_s=1.0 * settle_scale,
                     )
                 profiler.add("act", t0, step_idx)
-                if (
-                    ok
-                    and _is_simple_open_app_goal(goal, str(action["name"]))
-                    and await _locally_verify_open_app(str(action["name"]))
+                if ok and _is_simple_open_app_goal(
+                    goal, str(action["name"])
                 ):
                     yield _final(
                         stdout=(
-                            f"[cu] done (locally verified: "
-                            f"{action['name']} is running)\n"
+                            f"[cu] done (open_app succeeded: "
+                            f"{action['name']})\n"
                         ),
                         exit_code=_EXIT_OK,
                     )
