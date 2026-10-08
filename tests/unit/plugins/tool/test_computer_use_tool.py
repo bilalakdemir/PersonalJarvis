@@ -20,7 +20,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from jarvis.core.protocols import ExecutionContext, HarnessResult, HarnessTask
+from jarvis.core.protocols import ExecutionContext, HarnessResult, HarnessTask, ToolResult
 from jarvis.harness.computer_use_context import (
     ComputerUseContext,
     set_computer_use_context,
@@ -107,16 +107,73 @@ def test_tool_identity_and_schema() -> None:
     assert "desktop" in tool.description.lower()
 
 
+def test_simple_open_app_target_is_narrow() -> None:
+    from jarvis.plugins.tool.computer_use_tool import _simple_open_app_target
+
+    assert _simple_open_app_target("Open Notepad.") == "Notepad"
+    assert _simple_open_app_target("Launch Visual Studio Code") == "Visual Studio Code"
+    assert _simple_open_app_target("Notepad'i a\u00e7") == "Notepad"
+    assert _simple_open_app_target("Open Chrome and go to example.com") is None
+    assert _simple_open_app_target("Open https://example.com") is None
+
+
+@pytest.mark.asyncio
+async def test_simple_open_app_bypasses_vision_harness_even_without_cu_context(
+    monkeypatch,
+) -> None:
+    from jarvis.plugins.tool.computer_use_tool import ComputerUseTool
+    from jarvis.plugins.tool.open_app import OpenAppTool
+
+    calls: list[dict[str, object]] = []
+
+    async def fake_open(self, args, ctx):
+        calls.append(dict(args))
+        return ToolResult(success=True, output="opened")
+
+    monkeypatch.setattr(OpenAppTool, "execute", fake_open)
+    set_computer_use_context(None)
+    fake = _FakeHarnessManager()
+    tool = ComputerUseTool(manager=fake)
+
+    result = await tool.execute({"goal": "Open Notepad."}, _ctx())
+
+    assert result.success
+    assert result.output == "opened"
+    assert calls == [{"app_name": "Notepad"}]
+    assert fake.dispatched == []
+
+
+@pytest.mark.asyncio
+async def test_simple_open_app_failure_does_not_fall_back_to_vision(
+    monkeypatch,
+) -> None:
+    from jarvis.plugins.tool.computer_use_tool import ComputerUseTool
+    from jarvis.plugins.tool.open_app import OpenAppTool
+
+    async def fake_open(self, args, ctx):
+        return ToolResult(success=False, output=None, error="not installed")
+
+    monkeypatch.setattr(OpenAppTool, "execute", fake_open)
+    fake = _FakeHarnessManager()
+    tool = ComputerUseTool(manager=fake)
+
+    result = await tool.execute({"goal": "Open MissingApp."}, _ctx())
+
+    assert not result.success
+    assert result.error == "not installed"
+    assert fake.dispatched == []
+
+
 async def test_dispatches_goal_to_computer_use_harness() -> None:
     from jarvis.plugins.tool.computer_use_tool import ComputerUseTool
 
     fake = _FakeHarnessManager()
     tool = ComputerUseTool(manager=fake)
 
-    result = await tool.execute({"goal": "open a terminal"}, _ctx())
+    result = await tool.execute({"goal": "click the blue button"}, _ctx())
 
     assert result.success
-    assert fake.dispatched == [("screenshot", "open a terminal")]
+    assert fake.dispatched == [("screenshot", "click the blue button")]
 
 
 async def test_empty_goal_is_rejected_without_dispatch() -> None:
@@ -179,7 +236,7 @@ async def test_with_bus_returns_immediate_ack_and_announces_completion() -> None
     # wait_for: in the pre-fix inline implementation execute() blocks on the
     # never-released dispatch — the test must FAIL fast, not hang.
     result = await asyncio.wait_for(
-        tool.execute({"goal": "open chrome"}, _ctx()), timeout=2.0,
+        tool.execute({"goal": "open chrome and go to example.com"}, _ctx()), timeout=2.0,
     )
 
     # Immediate ACK — the mission has NOT finished yet.
@@ -198,7 +255,7 @@ async def test_with_bus_returns_immediate_ack_and_announces_completion() -> None
         if isinstance(e, AnnouncementRequested) and e.kind == "completion"
     ]
     assert len(completions) == 1
-    assert fake.dispatched == [("screenshot", "open chrome")]
+    assert fake.dispatched == [("screenshot", "open chrome and go to example.com")]
 
 
 async def test_with_bus_failure_is_announced_not_silent() -> None:
@@ -218,7 +275,7 @@ async def test_with_bus_failure_is_announced_not_silent() -> None:
     bus = _FakeBus()
     tool = ComputerUseTool(bus=bus, manager=_FailingManager())
 
-    result = await tool.execute({"goal": "open chrome"}, _ctx())
+    result = await tool.execute({"goal": "open chrome and go to example.com"}, _ctx())
     assert result.success  # ACK — outcome arrives via announcement
 
     for _ in range(200):
@@ -239,10 +296,10 @@ async def test_without_bus_keeps_synchronous_contract() -> None:
     fake = _FakeHarnessManager()
     tool = ComputerUseTool(manager=fake)
 
-    result = await tool.execute({"goal": "open a terminal"}, _ctx())
+    result = await tool.execute({"goal": "click the blue button"}, _ctx())
 
     assert result.success
-    assert fake.dispatched == [("screenshot", "open a terminal")]
+    assert fake.dispatched == [("screenshot", "click the blue button")]
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +387,7 @@ async def test_with_bus_ack_is_english_for_english_utterance() -> None:
     fake = _SlowHarnessManager()
     tool = ComputerUseTool(bus=bus, manager=fake)
 
-    result = await tool.execute({"goal": "open a terminal"}, _ctx_en())
+    result = await tool.execute({"goal": "open a terminal and type echo test"}, _ctx_en())
 
     assert result.success
     expected = action_phrase("cu_dispatch_ack", "en")
@@ -352,7 +409,7 @@ async def test_with_bus_ack_contains_no_internal_english_instruction() -> None:
 
     for goal, ctx in (
         ("Terminal öffnen", _ctx_de()),  # i18n-allow: DE fixture
-        ("open a terminal", _ctx_en()),
+        ("open a terminal and type echo test", _ctx_en()),
     ):
         bus = _FakeBus()
         fake = _SlowHarnessManager()
@@ -477,7 +534,7 @@ async def test_completion_carries_cu_tool_source_layer_for_history_mirror() -> N
 
     bus = _FakeBus()
     tool = ComputerUseTool(bus=bus, manager=_FakeHarnessManager())
-    result = await tool.execute({"goal": "open chrome"}, _ctx_en())
+    result = await tool.execute({"goal": "open chrome and inspect the screen"}, _ctx_en())
     assert result.success
 
     completions = await _collect_completion(bus)
@@ -507,7 +564,7 @@ async def test_execute_without_context_returns_honest_failure() -> None:
     set_computer_use_context(None)
     try:
         tool = ComputerUseTool(bus=None, manager=_FakeHarnessManager())
-        result = await tool.execute({"goal": "open the browser"}, _ctx())
+        result = await tool.execute({"goal": "open the browser and click a button"}, _ctx())
 
         assert result.success is False
         assert "not active" in (result.error or "").lower()
@@ -528,7 +585,7 @@ async def test_success_readback_falls_back_to_done_without_proof() -> None:
 
     bus = _FakeBus()
     tool = ComputerUseTool(bus=bus, manager=_NoProofManager())
-    result = await tool.execute({"goal": "open chrome"}, _ctx_en())
+    result = await tool.execute({"goal": "open chrome and inspect the screen"}, _ctx_en())
     assert result.success
 
     completions = await _collect_completion(bus)

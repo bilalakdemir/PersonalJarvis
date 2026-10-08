@@ -45,6 +45,57 @@ from jarvis.voice.action_phrases import (
 log = logging.getLogger(__name__)
 
 
+def _simple_open_app_target(goal: str) -> str | None:
+    """Return an app name only for a narrow launch-only desktop goal."""
+    raw = " ".join((goal or "").strip().rstrip(".!?").split())
+    if not raw:
+        return None
+    low = raw.casefold()
+
+    target = ""
+    for prefix in ("open ", "launch ", "start "):
+        if low.startswith(prefix):
+            target = raw[len(prefix):].strip()
+            break
+    if not target and low.endswith(" a\u00e7"):
+        target = raw[:-len(" a\u00e7")].strip()
+        low_target = target.casefold()
+        for suffix in ("'i", "'\u0131", "'u", "'\u00fc"):
+            if low_target.endswith(suffix):
+                target = target[:-len(suffix)].strip()
+                break
+    if not target:
+        return None
+
+    low_target = target.casefold()
+    for article in ("a ", "an ", "the "):
+        if low_target.startswith(article):
+            target = target[len(article):].strip()
+            low_target = target.casefold()
+            break
+
+    if not target or len(target) > 80:
+        return None
+    if any(mark in low_target for mark in (
+        " and ",
+        " then ",
+        " with ",
+        " in ",
+        " to ",
+        " ve ",
+        " sonra ",
+        "://",
+        "www.",
+        "\\\\",
+        "/",
+        ",",
+        ";",
+        "\n",
+    )):
+        return None
+    return target
+
+
 def _ctx_output_language(ctx: ExecutionContext) -> str:
     """Language for a deterministic CU readback (de/en/es).
 
@@ -185,6 +236,23 @@ class ComputerUseTool:
         goal = (args.get("goal") or "").strip()
         if not goal:
             return ToolResult(success=False, output=None, error="goal missing")
+
+        # Launch-only goals do not need visual planning. Running them through
+        # the screenshot loop lets a vision model wander on whatever window
+        # happened to be foreground (live 2026-10-08: "Open Notepad" clicked
+        # around Microsoft Store instead of calling open_app). Reuse the
+        # already-gated native open_app tool and keep compound desktop goals on
+        # the full Computer-Use loop below.
+        app_target = _simple_open_app_target(goal)
+        if app_target is not None:
+            from jarvis.plugins.tool.open_app import OpenAppTool  # noqa: PLC0415
+
+            log.info(
+                "computer_use: deterministic open_app fast-path target=%r",
+                app_target,
+            )
+            return await OpenAppTool().execute({"app_name": app_target}, ctx)
+
         # Fresh-machine honesty (2026-07-06): computer_use stays in ROUTER_TOOLS
         # unconditionally (ADR-0011), but the CU context is only wired when
         # [computer_use].enabled AND a vision engine exist (factory.py). On an
