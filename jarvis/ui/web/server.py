@@ -3378,13 +3378,22 @@ class WebServer:
                 return
             await capture.scheduler.trigger(TriggerSource.JOURNAL)
 
+        from jarvis.memory.temporary_runtime import review_expiring, set_running_capture
+
+        async def _temporary_review(item):
+            if not self.cfg.wiki_integration.enabled:
+                return "temporary"
+            return await review_expiring(item)
+
         runtime = await bootstrap_memory_retention(
             db_path=db_path,
             event_publisher=self.bus,
             recall=recall,
             final_review=_final_candidate_review,
+            temporary_review=_temporary_review,
         )
         self._memory_retention_runtime = runtime
+        set_running_capture(runtime.capture)
         logger.info("Governed memory retention online (db={})", db_path)
 
     async def _wiki_auto_backfill_loop(

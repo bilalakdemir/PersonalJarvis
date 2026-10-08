@@ -85,3 +85,20 @@ def contains_secret(text: str) -> bool:
         log.warning("learning guard: secret guard unavailable, refusing the write")
         return True
     return bool(_detect(text))
+
+
+def looks_like_governed_rule(text: str) -> bool:
+    """Conservative guard against bypassing governed approvals via notebooks.
+
+    Ambiguous instructions should not be written directly. The Wiki candidate
+    pipeline remains the durable approval path.
+    """
+    import re
+
+    return bool(re.search(
+        r"(?i)\b(?:always|never|must|mandatory|operating rule|standing rule|"
+        r"standard|sop|policy|governance|from now on|please always|please never|"
+        r"her zaman|daima|asla|mutlaka|zorunlu|standart|kural|prosedür|"  # i18n-allow
+        r"niemals|immer|regel|vorschrift|norma|siempre|nunca)\b",  # i18n-allow
+        text or "",
+    ))

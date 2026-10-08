@@ -378,6 +378,11 @@ class JarvisLearningLoop:
         return written, True
 
     def _apply_proposal(self, proposal: Proposal, reason: str) -> int:
+        from jarvis.memory.learning.guard import looks_like_governed_rule
+
+        if looks_like_governed_rule(proposal.text + " " + proposal.evidence):
+            log.info("learning: governed rule deferred to approval pipeline")
+            return 0
         return self._write(
             target=proposal.target,
             operation=proposal.operation,
@@ -403,7 +408,12 @@ class JarvisLearningLoop:
         from jarvis.memory.learning.guard import refusal
         from jarvis.society.memory_books import classify
 
+        from jarvis.memory.learning.guard import looks_like_governed_rule
+
         text = f"On {date.today().isoformat()} the user asked to remember: {content}"
+        if looks_like_governed_rule(content):
+            log.info("learning: governed instruction requires separate approval")
+            return 0
         if refusal(text):
             log.info("learning: explicit remember request refused by the guard")
             return 0

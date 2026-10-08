@@ -65,7 +65,7 @@ class MemorySweepResult:
 
 
 FinalReviewHook = Callable[[], Awaitable[None]]
-TemporaryReviewHook = Callable[[TemporaryMemoryItem], Awaitable[None]]
+TemporaryReviewHook = Callable[[TemporaryMemoryItem], Awaitable[str | None]]
 
 
 class MemoryRetentionSweeper:
@@ -104,8 +104,17 @@ class MemoryRetentionSweeper:
         reviewed = await self._run_pre_expiry_review()
 
         expired_items = await self._temporary.expired(limit=1000)
+        deleted_count = 0
         for item in expired_items:
+            # Fail closed: an unreviewed item never expires without a
+            # successful final extraction, even if its deadline passed.
+            if getattr(item, "promotion_state", "temporary") == "unreviewed":
+                await self._review_item(item)
+                current = await self._temporary.get(item.id)
+                if current is None or current.promotion_state == "unreviewed":
+                    continue
             if await self._temporary.delete(item.id):
+                deleted_count += 1
                 await self._publish(
                     TemporaryMemoryExpired(
                         source_layer="memory",
@@ -160,7 +169,7 @@ class MemoryRetentionSweeper:
             )
 
         return MemorySweepResult(
-            temporary_expired=len(expired_items),
+            temporary_expired=deleted_count,
             conversation_pruned=max(0, int(conversation_pruned)),
             candidates_expired=len(candidate_ids),
             persistent_approvals_expired=len(persistent_expired),
@@ -186,8 +195,7 @@ class MemoryRetentionSweeper:
                     expires_ms=item.expires_ms,
                 )
             )
-            if self._temporary_review is not None:
-                await self._temporary_review(item)
+            await self._review_item(item)
 
         # Candidate extraction/consolidation is already the normal durable
         # review path. Give that existing pipeline one bounded final chance
@@ -205,6 +213,19 @@ class MemoryRetentionSweeper:
                 await self._final_review()
         return attempted
 
+    async def _review_item(self, item: TemporaryMemoryItem) -> None:
+        if self._temporary_review is None:
+            return
+        try:
+            state = await self._temporary_review(item)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("temporary expiry review failed for item %s", item.id, exc_info=True)
+            return
+        if state in {"temporary", "candidate", "approval_pending", "promoted", "rejected"}:
+            await self._temporary.set_promotion_state(item.id, state)
+
     async def _publish(self, event: Any) -> None:
         if self._events is not None:
             await self._events.publish(event)
@@ -220,12 +241,14 @@ class MemoryRetentionRuntime:
         closeables: tuple[Any, ...],
         journal: CandidateJournal,
         interval_s: float = DEFAULT_SWEEP_INTERVAL_S,
+        capture: Any = None,
     ) -> None:
         if float(interval_s) <= 0:
             raise ValueError("interval_s must be positive")
         self._sweeper = sweeper
         self._closeables = closeables
         self._journal = journal
+        self.capture = capture
         self._interval_s = float(interval_s)
         self._task: asyncio.Task[None] | None = None
 
@@ -333,10 +356,15 @@ async def bootstrap_memory_retention(
         final_review=final_review,
         temporary_review=temporary_review,
     )
+    from .temporary_runtime import TemporaryConversationCapture
+    capture = TemporaryConversationCapture(db, bus=event_publisher)
+    await capture.store.open()
+    capture.start_voice()
     runtime = MemoryRetentionRuntime(
         sweeper=sweeper,
-        closeables=tuple(closeables),
+        closeables=tuple([capture, *closeables]),
         journal=journal,
+        capture=capture,
         interval_s=interval_s,
     )
     runtime.start()

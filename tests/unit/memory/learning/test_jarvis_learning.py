@@ -560,3 +560,23 @@ def test_the_brain_prompt_carries_the_learned_block(book: JarvisNotebook) -> Non
 
     assert "The user's printer is in the attic." in prompt
     assert prompt == manager._build_system_prompt()  # byte-stable for the prompt cache
+
+
+def test_governed_rule_not_directly_written_by_learning(book: JarvisNotebook) -> None:
+    from jarvis.memory.learning.review import Proposal
+    loop = JarvisLearningLoop(book, ScriptedReviewer())
+    proposal = Proposal(
+        target="memory", operation="add",
+        text="Always use the new AERION deployment policy.",
+        entry_id="", evidence="Always use the new AERION deployment policy.",
+        importance=9,
+    )
+    assert loop._apply_proposal(proposal, "review") == 0
+    assert _entries(book, "memory") == []
+
+
+def test_governed_explicit_remember_not_directly_written(book: JarvisNotebook) -> None:
+    loop = JarvisLearningLoop(book, ScriptedReviewer())
+    assert loop._keep_request("Remember this SOP: always verify deploys",
+                              "SOP: always verify deploys") == 0
+    assert _entries(book, "memory") == []

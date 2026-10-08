@@ -185,9 +185,14 @@ async def _society_completed(session: Any, completion: ChatCompletion) -> None:
 
 
 async def _jarvis_completed(session: Any, completion: ChatCompletion) -> None:
-    """Feed Jarvis' own learning loop (lazy); a no-op while it is switched off."""
+    """Capture bounded temporary context and feed the existing learning loop."""
+    from jarvis.memory.temporary_runtime import capture_chat_completion
     from jarvis.memory.learning.loop import current_loop
 
+    try:
+        await capture_chat_completion(session, completion)
+    except Exception:
+        log.warning("temporary chat capture unavailable", exc_info=True)
     loop = current_loop()
     if loop is not None:
         await loop.chat_turn_completed(session, completion)
