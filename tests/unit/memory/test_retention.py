@@ -147,3 +147,45 @@ async def test_bootstrap_memory_retention_starts_and_closes_runtime(
     finally:
         await runtime.close()
         await recall.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_preexpiry_review_does_not_delete_unreviewed(tmp_path):
+    from jarvis.memory.temporary import TemporaryMemoryStore
+    now = [1_700_000_000.0]
+    async with TemporaryMemoryStore(tmp_path / "jarvis.db", clock=lambda: now[0]) as store:
+        ident = await store.put(content="Important unreviewed turn", source="chat",
+                                kind="conversation_turn", retention_days=1)
+        now[0] += 2 * 86400
+        async def unavailable(item):
+            return None
+        sweeper = MemoryRetentionSweeper(
+            recall=_Recall(), temporary=store, journal=_Journal(),
+            persistent_approvals=_ApprovalQueue(), project_routes=_ProjectRoutes(),
+            policy=MemoryRetentionPolicy(), temporary_review=unavailable,
+            clock=lambda: now[0],
+        )
+        result = await sweeper.run_once()
+        assert result.temporary_expired == 0
+        assert (await store.get(ident)).promotion_state == "unreviewed"
+
+
+@pytest.mark.asyncio
+async def test_successful_expired_review_allows_delete(tmp_path):
+    from jarvis.memory.temporary import TemporaryMemoryStore
+    now = [1_700_000_000.0]
+    async with TemporaryMemoryStore(tmp_path / "jarvis.db", clock=lambda: now[0]) as store:
+        ident = await store.put(content="Reviewed context", source="chat",
+                                kind="conversation_turn", retention_days=1)
+        now[0] += 2 * 86400
+        async def reviewed(item):
+            return "temporary"
+        sweeper = MemoryRetentionSweeper(
+            recall=_Recall(), temporary=store, journal=_Journal(),
+            persistent_approvals=_ApprovalQueue(), project_routes=_ProjectRoutes(),
+            policy=MemoryRetentionPolicy(), temporary_review=reviewed,
+            clock=lambda: now[0],
+        )
+        result = await sweeper.run_once()
+        assert result.temporary_expired == 1
+        assert await store.get(ident) is None

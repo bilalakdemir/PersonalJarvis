@@ -98,6 +98,7 @@ _KNOWN_KINDS = frozenset(
         "person",
         "project",
         "decision",
+        "standard",
         "event",
         "asset",
         "place",
@@ -129,7 +130,7 @@ You extract durable personal-memory facts from one FOCUS USER TURN. Earlier
 turns and assistant replies are context for resolving references only.
 
 Return ONLY a JSON array. Each element: {"fact": "<one self-contained
-sentence>", "kind": "<identity|preference|activity|person|project|decision|
+sentence>", "kind": "<identity|preference|activity|person|project|decision|standard|standard|
 event|asset|place|organization|relationship|other>", "subjects":
 ["<lowercase-kebab-slug>", ...], "evidence_turn_id": "<focus turn id>",
 "basis": "<explicit|behavioral>", "salience": <integer 1-5>}.
@@ -191,7 +192,7 @@ Extract durable personal-memory facts that individual-turn review may have
 missed because the meaning emerged across several turns.
 
 Return ONLY a JSON array. Each element: {"fact": "<one self-contained
-sentence>", "kind": "<identity|preference|activity|person|project|decision|
+sentence>", "kind": "<identity|preference|activity|person|project|decision|standard|standard|
 event|asset|place|organization|relationship|other>", "subjects":
 ["<lowercase-kebab-slug>", ...], "evidence_turn_id": "<exact user turn id>",
 "basis": "<explicit|behavioral>", "salience": <integer 1-5>}.
@@ -304,6 +305,9 @@ class ConversationFactExtractor:
             prompt
             + "\n- For facts about the speaker, include the exact subject slug "
             + f'["{self._user_entity_slug}"].\n'
+            + "- Use kind standard for a proposed standing SOP, governing "
+              "working rule or long-lived assistant operating instruction. "
+              "Do not classify an ordinary personal preference as standard.\n"
         )
 
     # ------------------------------------------------------------------

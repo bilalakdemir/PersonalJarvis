@@ -162,9 +162,16 @@ class MemoryPromotionGate:
                 project_id=authority.project_id,
             )
 
+        # A request to remember a fact is not approval to establish a new
+        # SOP, standard, operating rule or cross-project governance policy.
+        if candidate.governance_class is not MemoryGovernanceClass.ORDINARY:
+            return self._decision(
+                MemoryPromotionOutcome.APPROVAL_REQUIRED,
+                "governed-persistent-memory",
+            )
+
         # A direct remember/save instruction is explicit approval for
-        # non-project persistent memory, but does not override ambiguity or
-        # conflict resolution.
+        # ordinary non-project memory only.
         if candidate.explicit_remember:
             if candidate.conflict:
                 return self._decision(

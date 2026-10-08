@@ -85,7 +85,7 @@ def test_explicit_remember_is_approval_for_non_project_rule(
         )
     )
 
-    assert result.outcome is MemoryPromotionOutcome.AUTO_PERSIST
+    assert result.outcome is MemoryPromotionOutcome.APPROVAL_REQUIRED
 
 
 def test_single_behavioral_observation_remains_temporary(

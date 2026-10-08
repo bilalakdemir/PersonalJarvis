@@ -453,7 +453,9 @@ class Consolidator:
             governance_class = (
                 MemoryGovernanceClass.USER_WIDE_DECISION
                 if row.kind == "decision"
-                else MemoryGovernanceClass.ORDINARY
+                else (MemoryGovernanceClass.STANDARD
+                      if row.kind == "standard"
+                      else MemoryGovernanceClass.ORDINARY)
             )
 
             project_resolution: ProjectContextResolution | None = None
