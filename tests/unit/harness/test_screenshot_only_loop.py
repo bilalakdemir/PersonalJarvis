@@ -20,6 +20,7 @@ from jarvis.harness.screenshot_only_loop import (
     CULoopError,
     _capture_monitor_geometry,
     _execute_action,
+    _open_goal_app_token,
     _parse_action,
     _parse_actions,
     _resolve_click_pixel,
@@ -1010,3 +1011,16 @@ def test_open_app_launched_at_most_once_per_mission(monkeypatch) -> None:
     # The loop still terminates (does not hang) — here via budget exhaustion,
     # since the pathological brain never emits done.
     assert final is not None and final.is_final
+
+
+def test_open_goal_parser_accepts_exact_launch_only() -> None:
+    assert _open_goal_app_token("Open Notepad.") == "notepad"
+    assert _open_goal_app_token("Launch Spotify") == "spotify"
+    assert _open_goal_app_token("Start Slack!") == "slack"
+    assert _open_goal_app_token("Oeffne Notepad") == "notepad"
+
+
+def test_open_goal_parser_rejects_compound_work() -> None:
+    assert _open_goal_app_token("Open Notepad and type hello") is None
+    assert _open_goal_app_token("Open Spotify and play a song") is None
+    assert _open_goal_app_token("Tell me whether Notepad is open") is None
