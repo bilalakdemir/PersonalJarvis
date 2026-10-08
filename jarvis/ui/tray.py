@@ -199,7 +199,9 @@ class JarvisTray:
         return Menu(
             # default=True binds the action to a double-click on the tray icon
             # ("double-click tray -> restore window").
-            MenuItem("Open", _emit("open_ui"), default=True),
+            MenuItem("Open AERION", _emit("open_ui"), default=True),
+            MenuItem("Restart AERION", _emit("restart")),
+            MenuItem("Diagnostics", _emit("diagnostics")),
             Menu.SEPARATOR,
             MenuItem(lambda _: f"Status: {self._state.value}", None, enabled=False),
             MenuItem(

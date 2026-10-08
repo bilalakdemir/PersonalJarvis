@@ -196,7 +196,9 @@ def test_tray_menu_strings_are_english() -> None:
     ):
         assert german not in src, german
     for english in (
-        '"Open"',
+        '"Open AERION"',
+        '"Restart AERION"',
+        '"Diagnostics"',
         '"Pause"',
         '"Resume"',
         '"Quit"',

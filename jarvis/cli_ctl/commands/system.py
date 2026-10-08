@@ -103,15 +103,11 @@ def audio_devices(
 
 @app.command()
 def status() -> None:
-    """Report server reachability + version (GET /api/control/auth/probe)."""
-    from jarvis.cli_ctl.__main__ import as_json, make_client
+    """Report AERION runtime, supervisor, self-engineering and startup status."""
+    from jarvis.cli_ctl.__main__ import as_json
+    from jarvis.operations.supervisor import operational_status
 
-    try:
-        with make_client() as client:
-            client.request("GET", "/api/control/auth/probe")
-        reachable = True
-    except ApiError:
-        reachable = False
-    render.emit({"reachable": reachable}, as_json=as_json())
-    if not reachable:
+    report = operational_status()
+    render.emit(report, as_json=as_json())
+    if not report["reachable"]:
         raise typer.Exit(code=1)
