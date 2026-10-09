@@ -8,21 +8,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import sqlite3
 import struct
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cbor2
 import pytest
-from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from jarvis.memory.project_approval_passkeys import (
-    PasskeyApprovalError, ProjectApprovalPasskeys, _b64,
+    PasskeyApprovalError,
+    ProjectApprovalPasskeys,
+    _b64,
 )
 
 NOW = 1_791_550_000_000
-SECRET = "disposable-fixture-secret-that-is-never-production"
+BOOTSTRAP = secrets.token_urlsafe(32)
 RP = "localhost"
 ORIGIN = "http://localhost:8384"
 
@@ -88,7 +92,7 @@ def _assertion(private, credential_id, challenge, *, user_verified=True,
 @pytest.fixture
 def real_store(tmp_path: Path, monkeypatch):
     dbpath = tmp_path / "cryptographic.sqlite3"
-    monkeypatch.setenv("AERION_PASSKEY_ENROLLMENT_SECRET", SECRET)
+    monkeypatch.setenv("AERION_PASSKEY_ENROLLMENT_SECRET", BOOTSTRAP)
     migration = (
         Path(__file__).parents[3] /
         "jarvis/memory/migrations/0014_project_state_approver_provenance.sql"
@@ -101,9 +105,9 @@ def real_store(tmp_path: Path, monkeypatch):
     )
     private = ec.generate_private_key(ec.SECP256R1())
     credential_id = b"independent-test-owner-credential"
-    enrollment = store.begin_enrollment(bootstrap_secret=SECRET)
+    enrollment = store.begin_enrollment(bootstrap_secret=BOOTSTRAP)
     store.finish_enrollment(
-        bootstrap_secret=SECRET, challenge=enrollment["challenge"],
+        bootstrap_secret=BOOTSTRAP, challenge=enrollment["challenge"],
         credential=_registration(private, credential_id, enrollment["challenge"]),
     )
     return store, private, credential_id
@@ -158,7 +162,7 @@ def test_replayed_credential_counter_refused(real_store):
 
 def test_registration_requires_uv_even_with_valid_es256_key(tmp_path, monkeypatch):
     dbpath = tmp_path / "non_uv.sqlite3"
-    monkeypatch.setenv("AERION_PASSKEY_ENROLLMENT_SECRET", SECRET)
+    monkeypatch.setenv("AERION_PASSKEY_ENROLLMENT_SECRET", BOOTSTRAP)
     migration = Path(__file__).parents[3] / (
         "jarvis/memory/migrations/0014_project_state_approver_provenance.sql"
     )
@@ -168,11 +172,40 @@ def test_registration_requires_uv_even_with_valid_es256_key(tmp_path, monkeypatc
     store = ProjectApprovalPasskeys(
         dbpath, rp_id=RP, origin=ORIGIN, now_ms=lambda: NOW,
     )
-    challenge = store.begin_enrollment(bootstrap_secret=SECRET)["challenge"]
+    challenge = store.begin_enrollment(bootstrap_secret=BOOTSTRAP)["challenge"]
     key = ec.generate_private_key(ec.SECP256R1())
     with pytest.raises(PasskeyApprovalError, match="enrollment verification failed"):
         store.finish_enrollment(
-            bootstrap_secret=SECRET, challenge=challenge,
+            bootstrap_secret=BOOTSTRAP, challenge=challenge,
             credential=_registration(key, b"not-verified", challenge,
                                      user_verified=False),
         )
+
+def test_concurrent_real_signed_assertion_is_single_use(real_store):
+    """Two replay attempts with one signed response cannot yield two grants."""
+    store, private, credential_id = real_store
+    challenge = _begin(store)
+    assertion = _assertion(private, credential_id, challenge)
+
+    def use_once(_):
+        try:
+            result = _finish(store, challenge, assertion)
+            return ("accepted", result.credential_id)
+        except PasskeyApprovalError:
+            return ("rejected", None)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(use_once, (1, 2)))
+    assert sorted(result[0] for result in results) == [
+        "accepted", "rejected",
+    ], results
+
+    with store._connect() as db:
+        grants = db.execute(
+            "SELECT COUNT(*) FROM memory_pm_passkey_grants"
+        ).fetchone()[0]
+        used = db.execute(
+            "SELECT used_ms FROM memory_pm_passkey_challenges WHERE kind='approve'"
+        ).fetchone()[0]
+    assert grants == 1
+    assert used is not None

@@ -6,34 +6,37 @@ by pytest, and not part of production. No owner credentials are enrolled.
 from __future__ import annotations
 
 import sqlite3
-import time
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from jarvis.memory.project_approval_passkeys import (
-    ProjectApprovalPasskeys, PasskeyApprovalError,
+    ProjectApprovalPasskeys,
 )
 from jarvis.memory.project_state_approval import (
-    ProjectStateProposalLifecycleError, ProjectStateProposalStore,
+    ProjectStateProposalLifecycleError,
+    ProjectStateProposalStore,
 )
 from tests.unit.memory.test_project_passkey_crypto import (
-    _registration, _assertion, RP, ORIGIN, SECRET,
+    BOOTSTRAP,
+    ORIGIN,
+    RP,
+    _assertion,
+    _registration,
 )
 from tests.unit.memory.test_project_state_approval import _setup
-
-from cryptography.hazmat.primitives.asymmetric import ec
 
 
 async def _prepared(tmp_path, monkeypatch):
     root, journal, queue, item, lifecycle, db_path = await _setup(tmp_path)
     stored = await lifecycle.prepare(item.id)
-    monkeypatch.setenv("AERION_PASSKEY_ENROLLMENT_SECRET", SECRET)
+    monkeypatch.setenv("AERION_PASSKEY_ENROLLMENT_SECRET", BOOTSTRAP)
     store = ProjectApprovalPasskeys(db_path, rp_id=RP, origin=ORIGIN)
     private = ec.generate_private_key(ec.SECP256R1())
     credential_id = b"disposable-owner-approval-credential"
-    enrollment = store.begin_enrollment(bootstrap_secret=SECRET)
+    enrollment = store.begin_enrollment(bootstrap_secret=BOOTSTRAP)
     store.finish_enrollment(
-        bootstrap_secret=SECRET, challenge=enrollment["challenge"],
+        bootstrap_secret=BOOTSTRAP, challenge=enrollment["challenge"],
         credential=_registration(private, credential_id, enrollment["challenge"]),
     )
     return root, journal, queue, item, lifecycle, db_path, stored, store, private, credential_id

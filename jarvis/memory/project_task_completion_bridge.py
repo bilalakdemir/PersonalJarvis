@@ -10,16 +10,18 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
-from jarvis.projects.registry import ProjectRegistry
 from jarvis.projects.models import ProjectStateApproval
+from jarvis.projects.registry import ProjectRegistry
+from jarvis.projects.signed_completion_verifier import (
+    CompletionReceiptSource,
+    SignedCompletionVerifier,
+)
 from jarvis.projects.state_store import ProjectStateStore
 from jarvis.projects.task_alignment import ProjectTaskAlignmentReader
 from jarvis.projects.task_journal import ProjectTaskJournal
 from jarvis.projects.task_reconciliation import (
-    ProjectTaskReconciler, ReconciliationBlocked,
-)
-from jarvis.projects.signed_completion_verifier import (
-    CompletionReceiptSource, SignedCompletionVerifier,
+    ProjectTaskReconciler,
+    ReconciliationBlocked,
 )
 
 from .project_state_approval import ProjectStateProposalStore

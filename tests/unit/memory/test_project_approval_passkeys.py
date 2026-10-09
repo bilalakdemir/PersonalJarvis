@@ -14,7 +14,6 @@ import pytest
 
 import jarvis.memory.project_approval_passkeys as pa
 
-
 NOW = 1_791_550_000_000
 SECRET = "local-only-disposable-test-bootstrap-" + "x" * 20
 PROJECT = "example"

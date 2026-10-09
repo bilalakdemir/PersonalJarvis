@@ -1,8 +1,8 @@
 """Real approval lifecycle + signed QA journal catch-up on temporary projects."""
 from __future__ import annotations
 
-from dataclasses import replace
 import sqlite3
+from dataclasses import replace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -15,8 +15,7 @@ from jarvis.memory.project_task_completion_bridge import (
 from jarvis.projects.signed_completion_verifier import SignedCompletionReceipt
 from jarvis.projects.task_journal import ProjectTaskJournal
 from jarvis.projects.task_reconciliation import ReconciliationBlocked
-
-from tests.unit.memory.test_project_state_approval import _setup, _registry
+from tests.unit.memory.test_project_state_approval import _registry, _setup
 
 NOW_MS = 1_791_540_000_000
 
