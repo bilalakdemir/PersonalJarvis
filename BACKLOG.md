@@ -4,6 +4,7 @@ Items here cannot become CURRENT without explicit reprioritization, and cannot o
 
 ## SIDE QUEST
 - Improve the local pre-push privacy check configuration without weakening CI checks.
+- Correct existing Windows-only `test_proposal_is_read_only_and_contains_exact_diff` character mismatch (same failure reproduced on unchanged baseline).
 - Observe the first natural production memory capture through privacy-preserving metrics.
 - Audit old worktrees and generated assets only after owners and retention needs are verified.
 

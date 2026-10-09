@@ -6,7 +6,7 @@ Owner: AERION chief interface; execution authority: each project-specific Projec
 
 ## 1. Boundaries and ownership
 - AERION interprets owner requests, resolves project identity, presents consolidated status and requests high-risk approvals. It is not a shared project task writer.
-- Each Project Manager owns one project's PROJECT.md, STATE.md, DECISIONS.md, TASKS.md and BACKLOG.md, with a strict project_root boundary.
+- Each Project Manager logically owns one project's PROJECT.md, STATE.md, DECISIONS.md, TASKS.md and BACKLOG.md, with a strict project_root boundary. All canonical-file writes must use the existing jarvis.projects.state_store.ProjectStateStore approval-bound transaction; the manager must not invent a second canonical-file writer.
 - Existing jarvis/missions/manager.py MissionManager owns dispatch, state transitions and replay/recovery; do not implement a second mission state machine.
 - Workers return evidence; they do not silently change the authoritative project ledger or authorize their own output.
 
@@ -23,7 +23,7 @@ Advancement of NEXT to CURRENT is atomic and forbidden while another CURRENT or 
 ## 3. Durability and concurrency
 - Use an atomic compare-and-swap revision per project and append-only audit log. Two concurrent writers must not both advance tasks.
 - Persist a state transition before reporting or publishing its effects. Recover from a crash by replaying committed events and reconciling pending missions.
-- Human-readable project Markdown files are materialized views and bootstrap context, not concurrent-write coordination.
+- The five canonical Markdown files are the existing owner-approved project state; the proposed PM task-execution ledger is an atomic operational journal, not an independent authority to update those files. Reconcile task transitions to the canonical state only through approved ProjectStateStore transactions, which already enforce exact revisions and filesystem rollback.
 - Validate project_root canonical resolution and reject symlink escapes, cross-project unauthorized reads and writes.
 
 ## 4. Delegation and approvals
@@ -54,7 +54,7 @@ Proposed operations:
 8. Mission dispatch and results preserve stable project/task identity.
 
 ## 7. Phases
-PM-001 contract -> PM-002 durable ledger -> PM-003 isolation and recovery -> PM-004 mission integration -> PM-005 AERION status and control -> PM-006 staged release and rollback. Specialist-agent design is deferred.
+PM-001 contract and canonical loader validation -> PM-002 execution journal using existing canonical writer -> PM-003 isolation and recovery -> PM-004 mission integration -> PM-005 AERION status and control -> PM-006 staged release and rollback. Specialist-agent design is deferred.
 
 ## 8. Baseline contract audit (2026-10-09)
 
@@ -72,4 +72,6 @@ Inspected existing source before implementing a new project ledger:
 4. The ledger's `CURRENT`/`VERIFYING` uniqueness constraint must be enforced transactionally, not only by a Markdown file or a process-local lock.
 5. Before any live deployment, test project/task scope resolution after restart and confirm the existing high-risk approval path is unchanged.
 
-Audit outcome: the proposed boundary is compatible with the existing mission subsystem, but the project ledger, reconciliation adapter and independent verifier remain **unimplemented**. This is a documentation/contract gate, not production acceptance.
+Additional canonical-state audit: `jarvis/projects/registry.py` already reads and validates project identities, `jarvis/projects/loader.py` requires specific headings and checks exactly one task with a `### CURRENT — ...` heading, and `jarvis/projects/state_store.py` is the existing **single governed writer** for the five canonical Markdown files. `jarvis/projects/transaction.py` already implements optimistic file revisions, an approval-bound transaction and rollback. PM-002 should add an atomic task-execution journal only; it must not replace the registry, create a competing canonical writer or claim committed canonical task completion before the existing ProjectStateStore confirms it.
+
+Audit outcome: the boundary is compatible with the existing mission and canonical-project subsystems, and the AERION bootstrap files have a regression test using the real project loader. The task journal, reconciliation adapter and independent verifier remain **unimplemented**. This is a documentation/contract gate, not production acceptance.

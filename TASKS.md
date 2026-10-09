@@ -3,10 +3,11 @@
 One CURRENT task at a time. An item can move into CURRENT only after the previous CURRENT task has been completed, recorded in STATE.md, and verified.
 
 ## CURRENT
-- [ ] PM-001 — Define Project Manager v1 ownership, task-state contract, mission boundary and recovery invariants. Acceptance: documented contract with one-CURRENT rule, scope isolation, lifecycle and approval gates.
+### CURRENT — PM-001 — Define Project Manager v1 ownership, task-state contract, mission boundary and recovery invariants.
+Acceptance: documented contract with one-CURRENT rule, scope isolation, lifecycle and approval gates; canonical AERION documents must also pass the existing project loader regression test.
 
 ## NEXT (ordered, not active)
-- [ ] PM-002 — Implement durable ProjectStateStore/registry and atomic transitions.
+- [ ] PM-002 — Implement an atomic PM task-execution ledger and reconcile canonical file changes through existing ProjectStateStore.
 - [ ] PM-003 — Add multi-project isolation, crash/restart recovery and concurrent-update tests.
 - [ ] PM-004 — Connect Project Manager task dispatch to existing MissionManager project scope.
 - [ ] PM-005 — Integrate concise project summaries and permission-gated AERION delegation.

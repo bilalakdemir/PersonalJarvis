@@ -1,4 +1,10 @@
+# Project
+AERION
+
 # AERION Project Charter
+
+## Main Goal
+Build a private, dependable AERION chief assistant on PersonalJarvis that delegates scoped projects to dedicated managers while enforcing memory, approval and rollback governance.
 
 ## Purpose
 Build AERION as the owner's private chief assistant on the PersonalJarvis foundation. AERION is the interface to personal tasks and to project-specific Project Manager agents, not a substitute for their execution ledgers.
