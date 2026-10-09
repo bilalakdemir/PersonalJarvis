@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 from dataclasses import fields
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from .signed_completion_verifier import SignedCompletionReceipt
+
+log = logging.getLogger(__name__)
 
 _MAX_BYTES = 4096
 _SCOPE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}\Z")
@@ -118,7 +121,11 @@ class DirectoryCompletionReceiptSource:
             )):
                 return None
             return SignedCompletionReceipt(**parsed)
-        except (OSError, ValueError, TypeError, OverflowError):
+        except (OSError, ValueError, TypeError, OverflowError) as exc:
+            log.warning(
+                "independent completion receipt inbox ignored invalid evidence (%s)",
+                type(exc).__name__,
+            )
             return None
 
 
