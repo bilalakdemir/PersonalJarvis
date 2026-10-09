@@ -4,7 +4,7 @@ One CURRENT task at a time. An item can move into CURRENT only after the previou
 
 ## CURRENT
 ### CURRENT — PM-002 — Implement a durable PM task-execution journal, reusing the existing governed ProjectStateStore for canonical-file changes.
-Acceptance: SQLite WAL journal, transactional project revisions, single active task, restart persistence and isolated tests. Canonical project Markdown changes still require existing approval-bound ProjectStateStore.
+Acceptance: SQLite WAL journal, transactional project revisions, single active task, restart persistence, read-only alignment with canonical project state, and isolated tests. PM-002 remains open until fail-closed approved reconciliation and independent verification are integrated; canonical project Markdown changes still require existing approval-bound ProjectStateStore.
 
 ## NEXT (ordered, not active)
 - [ ] PM-003 — Add multi-project isolation, crash/restart recovery and concurrent-update tests.

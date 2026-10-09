@@ -21,7 +21,8 @@ PM-002 — Implement a durable PM task-execution journal, reusing the existing g
 - Production checkout updated to e967f7f6; previous runtime health and rollback checks passed.
 
 ## PM-002 progress (not yet complete)
-- Initial isolated SQLite WAL task journal implemented with project-scoped revision checks, one active task, audit, and restart persistence.
+- Initial isolated SQLite WAL task journal implemented with project-scoped revision checks, one active task, audit, and restart persistence; PR #60 merged as 5b3a7a82 after all required CI checks passed.
+- PM-002 alignment follow-up: read-only comparison between journal and canonical state added in an isolated branch, with 10 focused tests passing. It is not wired to mission dispatch or a canonical writer.
 - Thirty-eight focused project tests passed on Windows (2 dependency deprecation warnings).
 - Ledger is not yet connected to live mission dispatch, independent verification, or approved canonical state application; production was not changed.
 
@@ -30,7 +31,7 @@ PM-002 — Implement a durable PM task-execution journal, reusing the existing g
 - Privacy pre-push on Windows warned about missing private-email configuration and an origin/main comparison on a develop-based repository. This is a tooling debt; CI privacy gates for PR #57 passed.
 
 ## Next Logical Step
-Implement and verify PM-002 isolated task-execution journal with atomic project revision checks; integrate canonical file writes only through existing approved ProjectStateStore transactions.
+Complete PM-002 with fail-closed reconciliation under existing approved ProjectStateStore transactions and independently verified completion evidence; add contract tests before allowing any mission dispatch to depend on the journal.
 
 ## Blockers
 PM-001 CI and canonical loader verification passed. Remaining cross-cutting verification debt: real production chat capture and the pre-existing Windows text encoding test; neither justifies bypassing project approvals.
