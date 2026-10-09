@@ -56,6 +56,8 @@ Proposed operations:
 ## 7. Phases
 PM-001 contract and canonical loader validation -> PM-002 execution journal using existing canonical writer -> PM-003 isolation and recovery -> PM-004 mission integration -> PM-005 AERION status and control -> PM-006 staged release and rollback. Specialist-agent design is deferred.
 
+The initial PM-002 task journal stores internal BACKLOG/NEXT/CURRENT/VERIFYING/DONE operational transitions in SQLite WAL, keyed by exact registered project IDs with optimistic revisions and an append-only audit. Its evidence reference is an unverified pointer, not permission to assert approval. No AERION user-facing task completion, mission result processing, canonical file rewrite, or automatic authority promotion may rely on it until subsequent independent-verification and approved-reconciliation integration tests pass.
+
 ## 8. Baseline contract audit (2026-10-09)
 
 Inspected existing source before implementing a new project ledger:
