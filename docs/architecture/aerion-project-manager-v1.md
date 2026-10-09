@@ -55,3 +55,21 @@ Proposed operations:
 
 ## 7. Phases
 PM-001 contract -> PM-002 durable ledger -> PM-003 isolation and recovery -> PM-004 mission integration -> PM-005 AERION status and control -> PM-006 staged release and rollback. Specialist-agent design is deferred.
+
+## 8. Baseline contract audit (2026-10-09)
+
+Inspected existing source before implementing a new project ledger:
+- `jarvis/missions/manager.py`: `MissionProjectScope` already carries `project_id`, `task_id`, and `project_root`. `dispatch()` validates the ID/root pairing and writes these fields in `MissionDispatched`; `project_scope(mission_id)` reconstructs them from persisted events after restart. Do not create a competing scope store.
+- `jarvis/missions/event_store.py`: mission events use a SQLite WAL append-before-publish flow. The project ledger needs its own atomic compare-and-swap transaction; the mission event store is not a task-state database.
+- `jarvis/missions/manager.py`: crash recovery is explicitly opt-in and requires primary-instance authority. The Project Manager must not invoke recovery from a secondary or read-only process.
+- `jarvis/missions/task_bridge.py`: global `MissionCompleted` signals carry `mission_id` and terminal status, **not** `project_id` or `task_id`. PM-004 must resolve the persisted scope via `MissionManager.project_scope(mission_id)` before updating a project task. Unknown, missing, or mismatched scope must fail closed.
+- `jarvis/missions/tool_approvals.py`: the approval coordinator is mission-scoped and only projects existing approval events. A Project Manager cannot infer approval from its own task state; it must use the existing approval workflow and verify that the approval belongs to the dispatched mission.
+
+### Integration hazards and required evidence
+1. A mission header is written before the `MissionDispatched` event; a crash between them can leave a header without a scoped event. Do not assume every mission header has valid project authority.
+2. A `MissionCompleted` notification may be lost or duplicated across restarts. The Project Manager must reconcile durable mission terminal events and apply completion idempotently, keyed by mission ID and task revision.
+3. A worker's terminal `approved` mission state is **not** automatically an approved Project Manager task: task acceptance requires independent evidence verification.
+4. The ledger's `CURRENT`/`VERIFYING` uniqueness constraint must be enforced transactionally, not only by a Markdown file or a process-local lock.
+5. Before any live deployment, test project/task scope resolution after restart and confirm the existing high-risk approval path is unchanged.
+
+Audit outcome: the proposed boundary is compatible with the existing mission subsystem, but the project ledger, reconciliation adapter and independent verifier remain **unimplemented**. This is a documentation/contract gate, not production acceptance.
