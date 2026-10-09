@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import sqlite3
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -48,6 +49,17 @@ async def _fixture(tmp_path, *, apply=True):
             proposal_digest=stored.proposal_digest,
         )
         assert applied.status == "COMMITTED"
+        # TEST-ONLY fake previously verified owner assertion. This does not
+        # mint a production approval; live verification must create the
+        # corresponding grant and consume it atomically before this metadata.
+        with sqlite3.connect(db_path) as db:
+            db.execute(
+                """UPDATE memory_project_state_proposals
+                   SET approved_by_credential_id=?, approved_via='webauthn',
+                       approval_assertion_digest=?
+                   WHERE queue_item_id=?""",
+                ("test-owner-credential", "a" * 64, item.id),
+            )
     proposals = ProjectStateProposalStore(db_path)
     signer = Ed25519PrivateKey.generate()
     key = signer.public_key().public_bytes(
@@ -104,6 +116,26 @@ async def test_real_applied_approval_and_signed_evidence_recover_journal(tmp_pat
                    for x in journal.audit("example"))
         assert final == journal.snapshot("example").revision
         assert await _recover(gateway(), item.id, revision) == final
+    finally:
+        await close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_applied_without_verified_owner_cannot_recover(tmp_path):
+    item, _, journal, revision, gateway, close = await _fixture(tmp_path)
+    try:
+        service = gateway()
+        conn = await service._proposals._ensure_open()
+        await conn.execute(
+            """UPDATE memory_project_state_proposals
+               SET approved_by_credential_id=NULL, approved_via=NULL,
+                   approval_assertion_digest=NULL
+               WHERE queue_item_id=?""",
+            (item.id,),
+        )
+        with pytest.raises(ReconciliationBlocked, match="approved and applied"):
+            await _recover(service, item.id, revision)
+        assert journal.snapshot("example").active_task == "N-10"
     finally:
         await close()
 

@@ -84,6 +84,9 @@ class ApprovedProjectTaskCompletionBridge:
             or record.decision_ms <= 0
             or record.applied_ms < record.decision_ms
             or not record.resulting_state_revision
+            or record.approved_via != "webauthn"
+            or not record.approved_by_credential_id
+            or not record.approval_assertion_digest
         ):
             raise ReconciliationBlocked("proposal was not durably approved and applied")
 

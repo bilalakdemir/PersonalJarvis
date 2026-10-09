@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -84,6 +85,9 @@ class StoredProjectStateProposal:
     applied_ms: int | None
     resulting_state_revision: str | None
     failure_reason: str | None
+    approved_by_credential_id: str | None = None
+    approved_via: str | None = None
+    approval_assertion_digest: str | None = None
 
 
 class ProjectStateProposalStore:
@@ -305,6 +309,8 @@ class ProjectStateProposalStore:
         queue_item_id: int,
         transaction_id: str,
         proposal_digest_value: str,
+        passkey_grant_token: str | None = None,
+        require_passkey: bool = False,
     ) -> StoredProjectStateProposal:
         conn = await self._ensure_open()
         now_ms = int(self._clock() * 1000)
@@ -331,15 +337,68 @@ class ProjectStateProposalStore:
                 raise ProjectStateProposalLifecycleError(
                     f"proposal is terminal: {stored.status}"
                 )
+            if require_passkey and stored.status != "awaiting-approval":
+                if (
+                    stored.approved_via != "webauthn"
+                    or not stored.approved_by_credential_id
+                    or not stored.approval_assertion_digest
+                ):
+                    raise ProjectStateProposalLifecycleError(
+                        "previous decision lacks verified owner-passkey provenance"
+                    )
             if stored.status == "awaiting-approval":
-                await conn.execute(
-                    """
-                    UPDATE memory_project_state_proposals
-                    SET status = 'approved', decision_ms = ?, updated_ms = ?
-                    WHERE queue_item_id = ? AND status = 'awaiting-approval'
-                    """,
-                    (now_ms, now_ms, int(queue_item_id)),
-                )
+                provenance = None
+                if passkey_grant_token:
+                    grant_hash = hashlib.sha256(
+                        passkey_grant_token.encode("utf-8")
+                    ).hexdigest()
+                    cur = await conn.execute(
+                        """SELECT credential_id,project_id,queue_item_id,
+                                  transaction_id,proposal_digest,assertion_digest,
+                                  expires_ms,consumed_ms
+                           FROM memory_pm_passkey_grants WHERE token_hash=?""",
+                        (grant_hash,),
+                    )
+                    provenance = await cur.fetchone()
+                    await cur.close()
+                    if (
+                        provenance is None
+                        or provenance["project_id"] != stored.project_id
+                        or provenance["queue_item_id"] != queue_item_id
+                        or provenance["transaction_id"] != transaction_id
+                        or provenance["proposal_digest"] != proposal_digest_value
+                        or provenance["expires_ms"] <= now_ms
+                        or provenance["consumed_ms"] is not None
+                    ):
+                        raise ProjectStateProposalLifecycleError(
+                            "verified owner-passkey grant missing or mismatched"
+                        )
+                    await conn.execute(
+                        """UPDATE memory_pm_passkey_grants
+                           SET consumed_ms=? WHERE token_hash=? AND consumed_ms IS NULL""",
+                        (now_ms, grant_hash),
+                    )
+                elif require_passkey:
+                    raise ProjectStateProposalLifecycleError(
+                        "owner WebAuthn assertion required for project approval"
+                    )
+                if provenance is not None:
+                    await conn.execute(
+                        """UPDATE memory_project_state_proposals
+                           SET status='approved', decision_ms=?, updated_ms=?,
+                               approved_by_credential_id=?, approved_via='webauthn',
+                               approval_assertion_digest=?
+                           WHERE queue_item_id=? AND status='awaiting-approval'""",
+                        (now_ms, now_ms, provenance["credential_id"],
+                         provenance["assertion_digest"], queue_item_id),
+                    )
+                else:
+                    await conn.execute(
+                        """UPDATE memory_project_state_proposals
+                           SET status='approved', decision_ms=?, updated_ms=?
+                           WHERE queue_item_id=? AND status='awaiting-approval'""",
+                        (now_ms, now_ms, queue_item_id),
+                    )
             row = await _fetch_proposal_row(conn, queue_item_id)
             assert row is not None
             await conn.execute("COMMIT")
@@ -637,6 +696,8 @@ class ProjectStateMemoryApprovalLifecycle:
         queue_item_id: int,
         transaction_id: str,
         proposal_digest: str,
+        owner_passkey_grant: str | None = None,
+        require_owner_passkey: bool = False,
     ) -> ProjectStateTransactionResult:
         """Apply only the exact explicitly approved durable proposal."""
 
@@ -644,6 +705,8 @@ class ProjectStateMemoryApprovalLifecycle:
             queue_item_id=queue_item_id,
             transaction_id=transaction_id,
             proposal_digest_value=proposal_digest,
+            passkey_grant_token=owner_passkey_grant,
+            require_passkey=require_owner_passkey,
         )
         await self._publish(
             ProjectStateMemoryApprovalAccepted(
@@ -968,6 +1031,9 @@ def _row_to_stored(row: aiosqlite.Row) -> StoredProjectStateProposal:
             if row["failure_reason"] is not None
             else None
         ),
+        approved_by_credential_id=row["approved_by_credential_id"],
+        approved_via=row["approved_via"],
+        approval_assertion_digest=row["approval_assertion_digest"],
     )
 
 

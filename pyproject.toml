@@ -92,6 +92,9 @@ dependencies = [
     # is what unlocks a passphrase-protected OpenSSH key (ssh-keygen's default
     # format), so a user's own protected key can be added at all.
     "asyncssh[bcrypt]>=2.21",
+    # Hardware-backed WebAuthn/Windows Hello approvals: use tested 2.x on all
+    # supported architectures (3.x requires cryptography unavailable on win-arm64).
+    "webauthn>=2.8,<3.0",
     "sounddevice>=0.5",  # PortAudio binding; needs system libportaudio2 on Linux
     # ChatGPT-Live (Codex subscription voice) carries audio ONLY on a WebRTC
     # media track — its protocol has no audio event at all. Jarvis owns that
