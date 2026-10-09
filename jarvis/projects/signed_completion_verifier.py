@@ -150,4 +150,6 @@ class SignedCompletionVerifier:
                 verified=True,
             )
         except (InvalidSignature, ValueError, TypeError, AttributeError):
+            # Invalid external evidence is expected to fail closed, not generate a noisy log.
+            # The caller raises ReconciliationBlocked when verification returns no evidence.
             return None
