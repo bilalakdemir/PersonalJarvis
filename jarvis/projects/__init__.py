@@ -33,6 +33,12 @@ from .registry import (
     load_registry,
 )
 from .state_store import ProjectStateApprovalError, ProjectStateStore
+from .task_reconciliation import (
+    CompletionEvidence,
+    CompletionVerifier,
+    ProjectTaskReconciler,
+    ReconciliationBlocked,
+)
 from .transaction import (
     ProjectStatePathError,
     ProjectStateReplayError,
@@ -44,6 +50,10 @@ from .transaction import (
 
 __all__ = [
     "CANONICAL_PROJECT_FILES",
+    "CompletionEvidence",
+    "CompletionVerifier",
+    "ProjectTaskReconciler",
+    "ReconciliationBlocked",
     "AmbiguousProjectError",
     "ProjectContextSnapshot",
     "ProjectDecision",
