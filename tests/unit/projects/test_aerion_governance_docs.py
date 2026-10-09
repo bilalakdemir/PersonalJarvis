@@ -22,7 +22,7 @@ def test_aerion_project_documents_are_readable_by_canonical_loader():
     assert snapshot is not None
     assert snapshot.project_name == "AERION"
     assert snapshot.current_task is not None
-    assert snapshot.current_task.startswith("PM-001")
+    assert snapshot.current_task.startswith("PM-002")
     assert len(snapshot.active_decisions) == 8
     assert snapshot.next_step
     assert snapshot.blockers

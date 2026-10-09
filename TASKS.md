@@ -3,11 +3,10 @@
 One CURRENT task at a time. An item can move into CURRENT only after the previous CURRENT task has been completed, recorded in STATE.md, and verified.
 
 ## CURRENT
-### CURRENT — PM-001 — Define Project Manager v1 ownership, task-state contract, mission boundary and recovery invariants.
-Acceptance: documented contract with one-CURRENT rule, scope isolation, lifecycle and approval gates; canonical AERION documents must also pass the existing project loader regression test.
+### CURRENT — PM-002 — Implement a durable PM task-execution journal, reusing the existing governed ProjectStateStore for canonical-file changes.
+Acceptance: SQLite WAL journal, transactional project revisions, single active task, restart persistence and isolated tests. Canonical project Markdown changes still require existing approval-bound ProjectStateStore.
 
 ## NEXT (ordered, not active)
-- [ ] PM-002 — Implement an atomic PM task-execution ledger and reconcile canonical file changes through existing ProjectStateStore.
 - [ ] PM-003 — Add multi-project isolation, crash/restart recovery and concurrent-update tests.
 - [ ] PM-004 — Connect Project Manager task dispatch to existing MissionManager project scope.
 - [ ] PM-005 — Integrate concise project summaries and permission-gated AERION delegation.
@@ -18,6 +17,7 @@ Acceptance: documented contract with one-CURRENT rule, scope isolation, lifecycl
 - [ ] PRIVACY-HOOK — Correct pre-push privacy identity and develop-base behavior; preserve CI privacy checks.
 
 ## DONE
+- [x] PM-001 — Documented and verified Project Manager contracts and canonical project loader integration (PR #59; CI PASS; merge eaa9aac4).
 - [x] MEM-001 — Temporary capture, governed expiry review, and standards gating integrated (PR #57).
 - [x] MEM-002 — Real chat completion contract covered by regression test (PR #58).
 
