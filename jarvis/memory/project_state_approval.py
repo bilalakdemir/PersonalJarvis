@@ -310,8 +310,12 @@ class ProjectStateProposalStore:
         transaction_id: str,
         proposal_digest_value: str,
         passkey_grant_token: str | None = None,
-        require_passkey: bool = False,
+        require_passkey: bool = True,
     ) -> StoredProjectStateProposal:
+        if not require_passkey:
+            raise ProjectStateProposalLifecycleError(
+                "owner WebAuthn is mandatory for project-state approval"
+            )
         conn = await self._ensure_open()
         now_ms = int(self._clock() * 1000)
         await conn.execute("BEGIN IMMEDIATE")
@@ -697,10 +701,14 @@ class ProjectStateMemoryApprovalLifecycle:
         transaction_id: str,
         proposal_digest: str,
         owner_passkey_grant: str | None = None,
-        require_owner_passkey: bool = False,
+        require_owner_passkey: bool = True,
     ) -> ProjectStateTransactionResult:
-        """Apply only the exact explicitly approved durable proposal."""
+        """Apply only the exact owner-passkey approved durable proposal."""
 
+        if not require_owner_passkey:
+            raise ProjectStateProposalLifecycleError(
+                "owner WebAuthn is mandatory for project-state approval"
+            )
         stored = await self._proposals.approve_identity(
             queue_item_id=queue_item_id,
             transaction_id=transaction_id,

@@ -17,7 +17,7 @@
 # this machine); fall back to whatever 'python'/'python3' resolves to. The sync
 # engine is stdlib + git only, so any Python 3.x works. No Python at all -> skip.
 PY="/c/Program Files/Python311/python.exe"
-[ -x "$PY" ] || PY="$(command -v python3 2>/dev/null || command -v python 2>/dev/null)"
+[ -x "$PY" ] || PY="$(command -v python 2>/dev/null || command -v python3 2>/dev/null)"
 [ -n "$PY" ] || exit 0
 
 sync="scripts/ci/sync_agents_md.py"

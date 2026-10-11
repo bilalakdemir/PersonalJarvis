@@ -227,15 +227,22 @@ async def test_prepare_is_durable_read_only_and_claims_queue(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_exact_approval_commits_and_closes_queue(tmp_path: Path) -> None:
-    root, journal, queue, item, lifecycle, _ = await _setup(tmp_path)
+async def test_exact_approval_commits_and_closes_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.unit.memory.test_project_passkey_approved_lifecycle import _prepared, _proof
+
+    root, journal, queue, item, lifecycle, _, stored, service, signer, cid = (
+        await _prepared(tmp_path, monkeypatch)
+    )
 
     try:
-        stored = await lifecycle.prepare(item.id)
+        grant = _proof(service, stored, item, signer, cid)
         result = await lifecycle.approve_and_apply(
             queue_item_id=item.id,
             transaction_id=stored.transaction_id,
             proposal_digest=stored.proposal_digest,
+            owner_passkey_grant=grant.token,
         )
         assert result.status == "COMMITTED"
         queued = await queue.get(item.id)

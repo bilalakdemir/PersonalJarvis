@@ -3,6 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HudApprovalReadOnlyError, decideHudApproval } from "@/lib/hudApi";
 import type { HudApproval } from "@/types/hud";
 
+// Wire-level test: WebAuthn browser behavior is covered in passkeyCeremony.test.ts.
+vi.mock("@/lib/passkeyCeremony", () => ({
+  verifyOwnerPasskey: vi.fn().mockResolvedValue({ id: "test-credential", type: "public-key" }),
+  registerOwnerPasskey: vi.fn(),
+}));
+
 function card(overrides: Partial<HudApproval> = {}): HudApproval {
   return {
     approval_id: "tool_call:mission/one:11111111-2222-4333-8444-555555555555:run_shell",
@@ -58,8 +64,12 @@ describe("decideHudApproval", () => {
     );
   });
 
-  it("routes an exact project-state decision to its owning API", async () => {
+  it("requires a passkey challenge before the exact project-state approval", async () => {
     const fetchMock = mockFetch();
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ challenge: "AQID", rpId: "localhost" }),
+    });
     await decideHudApproval(
       card({
         kind: "project_state",
@@ -71,10 +81,21 @@ describe("decideHudApproval", () => {
       }),
       "approve",
     );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/memory/governance/project-state/13/tx%2Fone/digest%2Bone/approve",
+      "/api/memory/governance/project-state/13/tx%2Fone/digest%2Bone/passkey/begin",
     );
     expect(fetchMock.mock.calls[0][1]).toEqual({ method: "POST" });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/api/memory/governance/project-state/13/tx%2Fone/digest%2Bone/approve",
+    );
+    expect(fetchMock.mock.calls[1][1]).toEqual({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        challenge: "AQID", credential: { id: "test-credential", type: "public-key" },
+      }),
+    });
   });
 
   it("routes an exact persistent-memory rejection to its owning API", async () => {
