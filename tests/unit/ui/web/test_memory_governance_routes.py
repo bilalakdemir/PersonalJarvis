@@ -8,7 +8,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from jarvis.memory.persistent_approval import PersistentMemoryApprovalError
-from jarvis.memory.project_state_approval import ProjectStateProposalLifecycleError
 from jarvis.ui.web.control_auth import require_control_key_or_session
 from jarvis.ui.web.memory_governance_routes import router
 
@@ -179,15 +178,24 @@ def test_project_reject_binds_all_three_identifiers() -> None:
 
 
 def test_project_identity_conflict_is_409() -> None:
-    lifecycle = _ProjectLifecycle(
-        error=ProjectStateProposalLifecycleError("approval digest mismatch")
-    )
-    response = _client(_Handle(project=lifecycle)).post(
-        "/api/memory/governance/project-state/14/tx-456/wrong/approve"
+    class StoredProposals:
+        async def get(self, queue_item_id: int):
+            assert queue_item_id == 14
+            return SimpleNamespace(
+                status="awaiting-approval", transaction_id="tx-456",
+                proposal_digest="expected", project_id="example",
+            )
+
+    lifecycle = _ProjectLifecycle()
+    lifecycle._proposals = StoredProposals()
+    response = _client(_Handle(project=lifecycle), passkeys=object()).post(
+        "/api/memory/governance/project-state/14/tx-456/wrong/approve",
+        json={"challenge": "not-a-proof", "credential": {}},
     )
 
     assert response.status_code == 409
-    assert "digest" in response.json()["detail"]
+    assert "exact pending approval" in response.json()["detail"]
+    assert lifecycle.calls == []
 
 
 def test_mutating_routes_are_marked_dangerous() -> None:

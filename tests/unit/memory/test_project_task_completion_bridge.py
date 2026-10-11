@@ -1,7 +1,6 @@
 """Real approval lifecycle + signed QA journal catch-up on temporary projects."""
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import replace
 
 import pytest
@@ -15,13 +14,18 @@ from jarvis.memory.project_task_completion_bridge import (
 from jarvis.projects.signed_completion_verifier import SignedCompletionReceipt
 from jarvis.projects.task_journal import ProjectTaskJournal
 from jarvis.projects.task_reconciliation import ReconciliationBlocked
-from tests.unit.memory.test_project_state_approval import _registry, _setup
+from tests.unit.memory.test_project_passkey_approved_lifecycle import _prepared, _proof
+from tests.unit.memory.test_project_state_approval import _registry
 
 NOW_MS = 1_791_540_000_000
 
 
 async def _fixture(tmp_path, *, apply=True):
-    root, candidate_journal, queue, item, lifecycle, db_path = await _setup(tmp_path)
+    with pytest.MonkeyPatch.context() as env:
+        (root, candidate_journal, queue, item, lifecycle, db_path,
+         stored, service, owner_key, owner_credential) = await _prepared(
+            tmp_path, env
+        )
     registry = _registry(root)
     journal = ProjectTaskJournal(tmp_path / "task-journal.sqlite3", registry)
     revision = journal.add_task(
@@ -40,25 +44,15 @@ async def _fixture(tmp_path, *, apply=True):
     old_revision = journal.transition(
         "example", "N-10", "VERIFYING", expected_revision=revision,
         actor="pm", reason="pending verification")
-    stored = await lifecycle.prepare(item.id)
     if apply:
+        grant = _proof(service, stored, item, owner_key, owner_credential)
         applied = await lifecycle.approve_and_apply(
             queue_item_id=item.id,
             transaction_id=stored.transaction_id,
             proposal_digest=stored.proposal_digest,
+            owner_passkey_grant=grant.token,
         )
         assert applied.status == "COMMITTED"
-        # TEST-ONLY fake previously verified owner assertion. This does not
-        # mint a production approval; live verification must create the
-        # corresponding grant and consume it atomically before this metadata.
-        with sqlite3.connect(db_path) as db:
-            db.execute(
-                """UPDATE memory_project_state_proposals
-                   SET approved_by_credential_id=?, approved_via='webauthn',
-                       approval_assertion_digest=?
-                   WHERE queue_item_id=?""",
-                ("test-owner-credential", "a" * 64, item.id),
-            )
     proposals = ProjectStateProposalStore(db_path)
     signer = Ed25519PrivateKey.generate()
     key = signer.public_key().public_bytes(
