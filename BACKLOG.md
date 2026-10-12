@@ -3,6 +3,7 @@
 Items here cannot become CURRENT without explicit reprioritization, and cannot override the project's next task.
 
 ## SIDE QUEST
+- Brave browser policy — PR #69 open and CI-green, not merged/deployed. Windows user-level Brave-only launch was verified on Akdemir in a prior session; Windows system HTTP handler remained Edge. Keep this separate from CURRENT PM-002, review/merge only within its own safe release process.
 - Improve the local pre-push privacy check configuration without weakening CI checks.
 - Correct existing Windows-only `test_proposal_is_read_only_and_contains_exact_diff` character mismatch (same failure reproduced on unchanged baseline).
 - Observe the first natural production memory capture through privacy-preserving metrics.
@@ -15,6 +16,7 @@ Items here cannot become CURRENT without explicit reprioritization, and cannot o
 - Enhance HUD with selectively adopted visual components.
 - Add opt-in morning status summaries and threshold-based alerts.
 - Test recovery against interrupted writes and misordered mission events under fault injection.
+- Evaluate a repository CI ledger-drift check after separate explicit design/security approval; the existing read-only daily audit now compares GitHub progress against the canonical files.
 
 ## Never silently promote
 - Irreversible actions or confidential external submissions.
