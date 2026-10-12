@@ -157,11 +157,18 @@ def open_file_with(file: Path, launch_kind: str, launch_value: str) -> bool:
 # root dirs probed in _windows_browser_candidates. Edge ships on stock Win10/11,
 # so in practice this list almost always yields a real browser exe to fall back to
 # when the default association is broken/hijacked.
+# Explicit user preference: with JARVIS_BROWSER_ONLY=brave, never silently
+# launch Edge/Chrome even if Windows maps HTTP localhost links to Edge.
+def _brave_only() -> bool:
+    return os.environ.get("JARVIS_BROWSER_ONLY", "").strip().casefold() == "brave"
+
+
+_WINDOWS_BRAVE_RELPATH = r"BraveSoftware\Brave-Browser\Application\brave.exe"
 _WINDOWS_BROWSER_RELPATHS = (
+    _WINDOWS_BRAVE_RELPATH,
     r"Google\Chrome\Application\chrome.exe",
     r"Microsoft\Edge\Application\msedge.exe",
     r"Mozilla Firefox\firefox.exe",
-    r"BraveSoftware\Brave-Browser\Application\brave.exe",
 )
 
 
@@ -217,9 +224,7 @@ def _windows_default_browser_exe() -> str | None:
             r"\UrlAssociations\https\UserChoice",
         ) as key:
             progid, _ = winreg.QueryValueEx(key, "ProgId")
-        with winreg.OpenKey(
-            winreg.HKEY_CLASSES_ROOT, rf"{progid}\shell\open\command"
-        ) as key:
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"{progid}\shell\open\command") as key:
             command, _ = winreg.QueryValueEx(key, "")  # "" = the (Default) value
     except OSError:  # An absent registry association leaves no executable to open.
         return None
@@ -251,12 +256,18 @@ def _windows_browser_candidates() -> list[str]:
             seen.add(norm)
             out.append(path)
 
-    _add(_windows_default_browser_exe())
     roots = [
         os.environ.get("PROGRAMFILES", r"C:\Program Files"),
         os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
         os.environ.get("LOCALAPPDATA", ""),
     ]
+    # Brave must be attempted before any OS URL association, even for HTTP.
+    for root in roots:
+        if root:
+            _add(str(Path(root) / _WINDOWS_BRAVE_RELPATH))
+    if _brave_only():
+        return out  # No implicit Edge/Chrome fallback or ShellExecute.
+    _add(_windows_default_browser_exe())
     for relpath in _WINDOWS_BROWSER_RELPATHS:
         for root in roots:
             if root:
@@ -288,6 +299,9 @@ def _open_url_windows(url: str) -> bool:
         except OSError as exc:
             log.warning("open_url: %s failed (%s); trying next candidate", exe, exc)
             continue
+    if _brave_only():
+        log.warning("open_url: Brave is required but unavailable for %s", host)
+        return False
     # Last resort: hand the URL to the OS association. It may be a UWP handler with
     # no classic exe — but it is also the path that silently opens nothing for a
     # dead/hijacked association, so we cannot verify it actually opened a browser.
@@ -295,7 +309,8 @@ def _open_url_windows(url: str) -> bool:
         os.startfile(url)  # type: ignore[attr-defined]  # noqa: S606
         log.warning(
             "open_url: no browser exe found; handed off to ShellExecute "
-            "(cannot verify it opened) for %s", host,
+            "(cannot verify it opened) for %s",
+            host,
         )
         return True  # best-effort; ShellExecute may open nothing for a dead handler
     except OSError as exc:
@@ -307,19 +322,20 @@ def _open_url_windows(url: str) -> bool:
 # fails — the same robustness the Windows path has. macOS: app display-names for
 # ``open -a``. Linux: browser executables probed on PATH.
 _MACOS_BROWSER_APPS = (
+    "Brave Browser",
     "Google Chrome",
     "Safari",
     "Firefox",
     "Microsoft Edge",
-    "Brave Browser",
 )
 _LINUX_BROWSER_BINS = (
+    "brave-browser",
+    "brave",
     "google-chrome",
     "google-chrome-stable",
     "chromium",
     "chromium-browser",
     "firefox",
-    "brave-browser",
     "microsoft-edge",
     "x-www-browser",
     "sensible-browser",
@@ -356,6 +372,8 @@ def _open_url_macos(url: str) -> bool:
     :func:`open_url`. Honest: returns False if nothing opened.
     """
     host = urlparse(url).netloc
+    if _brave_only():
+        return _run_opener_checked(["open", "-a", "Brave Browser", url])
     if _run_opener_checked(["open", url]):
         log.info("open_url: macOS launched default browser -> %s", host)
         log.debug("open_url: full URL %s", url)
@@ -376,6 +394,19 @@ def _open_url_linux(url: str) -> bool:
     so it mirrors the Windows direct launch — success means the process started.
     """
     host = urlparse(url).netloc
+    if _brave_only():
+        for brave_name in ("brave-browser", "brave"):
+            exe = shutil.which(brave_name)
+            if exe:
+                try:
+                    subprocess.Popen(  # noqa: S603
+                        [exe, url], creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True
+                    )
+                    return True
+                except OSError:
+                    continue
+        log.warning("open_url: Brave is required but unavailable for %s", host)
+        return False
     if _run_opener_checked(["xdg-open", url]):
         log.info("open_url: Linux launched default browser -> %s", host)
         log.debug("open_url: full URL %s", url)
