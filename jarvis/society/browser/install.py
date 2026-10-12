@@ -152,8 +152,17 @@ def system_browser_executable() -> Path | None:
 
 
 def preferred_browser_executable(data_dir: Path | None = None) -> Path:
-    """Use Brave when available, then Chrome/Chromium, then managed Chromium."""
-
+    """Choose Brave first; an explicit Brave-only policy forbids silent fallback."""
+    if os.environ.get("JARVIS_BROWSER_ONLY", "").strip().casefold() == "brave":
+        brave_names, _ = _system_browser_names()
+        brave_paths, _ = _system_browser_paths()
+        for name in brave_names:
+            if found := shutil.which(name):
+                return Path(found)
+        for candidate in brave_paths:
+            if candidate.is_file():
+                return candidate
+        raise FileNotFoundError("Brave is required by JARVIS_BROWSER_ONLY")
     return system_browser_executable() or browser_executable(data_dir)
 
 

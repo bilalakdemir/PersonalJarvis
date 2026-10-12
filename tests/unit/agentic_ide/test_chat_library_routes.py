@@ -336,3 +336,25 @@ def test_open_in_remote_needs_a_remote(client: TestClient, tmp_path: Path) -> No
         f"/api/chat-library/projects/{project.id}/open-in", json={"target": "remote"}
     )
     assert response.status_code == 404
+
+
+def test_open_in_remote_uses_governed_browser_launcher(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from jarvis.agentic_ide import project_links
+    from jarvis.platform import open_path
+
+    client.app.state.native_file_actions = True
+    project = library.ensure_project(tmp_path)
+    monkeypatch.setattr(project_links, "remote_web_url", lambda folder: "https://github.com/me/app")
+    invoked = []
+    monkeypatch.setattr(open_path, "open_url", lambda url: invoked.append(url) or True)
+    response = client.post(
+        f"/api/chat-library/projects/{project.id}/open-in",
+        json={"target": "remote"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"opened": True}
+    assert invoked == ["https://github.com/me/app"]

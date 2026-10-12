@@ -400,9 +400,9 @@ def open_project_in(request: Request, project_id: str, body: OpenInIn) -> Reveal
         url = project_links.remote_web_url(folder)
         if url is None:
             raise HTTPException(status_code=404, detail="This folder has no hosted git remote.")
-        import webbrowser
+        from jarvis.platform.open_path import open_url
 
-        return RevealedOut(opened=webbrowser.open(url))
+        return RevealedOut(opened=open_url(url))
     from jarvis.platform.open_path import open_file_with
     from jarvis.ui.web import outputs_routes
 

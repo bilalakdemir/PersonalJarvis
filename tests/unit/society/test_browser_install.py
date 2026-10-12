@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+
 from jarvis.society.browser import bootstrap, install
 
 
@@ -193,3 +194,24 @@ def test_python311_host_uses_managed_python312_runtime(monkeypatch, tmp_path: Pa
     first_venv = next(command for command in commands if "venv" in command)
     assert first_venv[:4] == ["uv", "venv", "--python", "3.12"]
     assert str(root / "runtimes") in first_venv[-1]
+
+
+def test_brave_only_does_not_fall_back_to_chromium(monkeypatch, tmp_path):
+    monkeypatch.setenv("JARVIS_BROWSER_ONLY", "brave")
+    monkeypatch.setattr(install, "_system_browser_names", lambda: (("brave",), ("chrome",)))
+    monkeypatch.setattr(install, "_system_browser_paths", lambda: ((), ()))
+    monkeypatch.setattr(
+        install.shutil, "which", lambda name: "/fake/chrome" if name == "chrome" else None
+    )
+    with pytest.raises(FileNotFoundError, match="Brave is required"):
+        install.preferred_browser_executable(tmp_path)
+
+
+def test_brave_only_installed_binary_is_selected(monkeypatch, tmp_path):
+    binary = tmp_path / "brave.exe"
+    binary.write_bytes(b"test")
+    monkeypatch.setenv("JARVIS_BROWSER_ONLY", "brave")
+    monkeypatch.setattr(install, "_system_browser_names", lambda: (("brave",), ("chrome",)))
+    monkeypatch.setattr(install, "_system_browser_paths", lambda: ((binary,), ()))
+    monkeypatch.setattr(install.shutil, "which", lambda name: None)
+    assert install.preferred_browser_executable(tmp_path) == binary
