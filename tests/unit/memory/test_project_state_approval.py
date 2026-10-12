@@ -13,8 +13,8 @@ from jarvis.memory.project_state_approval import (
     ProjectStateMemoryApprovalLifecycle,
     ProjectStateProposalIdentityError,
     ProjectStateProposalLifecycleError,
-    ProjectStateProposalStore,
     ProjectStateProposalStaleError,
+    ProjectStateProposalStore,
 )
 from jarvis.memory.project_state_planner import ProjectStateMemoryPlanner
 from jarvis.memory.promotion_queue import MemoryPromotionQueue
@@ -227,15 +227,22 @@ async def test_prepare_is_durable_read_only_and_claims_queue(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_exact_approval_commits_and_closes_queue(tmp_path: Path) -> None:
-    root, journal, queue, item, lifecycle, _ = await _setup(tmp_path)
+async def test_exact_approval_commits_and_closes_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.unit.memory.test_project_passkey_approved_lifecycle import _prepared, _proof
+
+    root, journal, queue, item, lifecycle, _, stored, service, signer, cid = (
+        await _prepared(tmp_path, monkeypatch)
+    )
 
     try:
-        stored = await lifecycle.prepare(item.id)
+        grant = _proof(service, stored, item, signer, cid)
         result = await lifecycle.approve_and_apply(
             queue_item_id=item.id,
             transaction_id=stored.transaction_id,
             proposal_digest=stored.proposal_digest,
+            owner_passkey_grant=grant.token,
         )
         assert result.status == "COMMITTED"
         queued = await queue.get(item.id)
@@ -286,14 +293,21 @@ async def test_recover_pending_replays_waiting_exact_proposal(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_recover_pending_resumes_already_approved_apply(tmp_path: Path) -> None:
-    root, journal, queue, item, lifecycle, _ = await _setup(tmp_path)
+async def test_recover_pending_resumes_already_approved_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.unit.memory.test_project_passkey_approved_lifecycle import _prepared, _proof
+
+    root, journal, queue, item, lifecycle, _, stored, service, signer, cid = (
+        await _prepared(tmp_path, monkeypatch)
+    )
     try:
-        stored = await lifecycle.prepare(item.id)
+        grant = _proof(service, stored, item, signer, cid)
         approved = await lifecycle._proposals.approve_identity(
             queue_item_id=item.id,
             transaction_id=stored.transaction_id,
             proposal_digest_value=stored.proposal_digest,
+            passkey_grant_token=grant.token,
         )
         assert approved.status == "approved"
 
@@ -374,12 +388,15 @@ async def test_reject_is_terminal_and_never_writes(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_stale_canonical_state_fails_and_marks_queue_failed(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    root, journal, queue, item, lifecycle, _ = await _setup(tmp_path)
+    from tests.unit.memory.test_project_passkey_approved_lifecycle import _prepared, _proof
 
+    root, journal, queue, item, lifecycle, _, stored, service, signer, cid = (
+        await _prepared(tmp_path, monkeypatch)
+    )
     try:
-        stored = await lifecycle.prepare(item.id)
+        grant = _proof(service, stored, item, signer, cid)
         (root / "BACKLOG.md").write_text(
             "# Backlog\n\n## FUTURE\n\n- Changed elsewhere\n",
             encoding="utf-8",
@@ -389,6 +406,7 @@ async def test_stale_canonical_state_fails_and_marks_queue_failed(
                 queue_item_id=item.id,
                 transaction_id=stored.transaction_id,
                 proposal_digest=stored.proposal_digest,
+                owner_passkey_grant=grant.token,
             )
         queued = await queue.get(item.id)
         assert queued is not None
@@ -438,16 +456,20 @@ async def test_generic_action_approval_does_not_apply_project_state(
 
 @pytest.mark.asyncio
 async def test_committed_manifest_recovers_after_crash_before_queue_finalize(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    root, journal, queue, item, lifecycle, _ = await _setup(tmp_path)
+    from tests.unit.memory.test_project_passkey_approved_lifecycle import _prepared, _proof
 
+    root, journal, queue, item, lifecycle, _, stored, service, signer, cid = (
+        await _prepared(tmp_path, monkeypatch)
+    )
     try:
-        stored = await lifecycle.prepare(item.id)
+        grant = _proof(service, stored, item, signer, cid)
         approved = await lifecycle._proposals.approve_identity(
             queue_item_id=item.id,
             transaction_id=stored.transaction_id,
             proposal_digest_value=stored.proposal_digest,
+            passkey_grant_token=grant.token,
         )
         direct = await lifecycle._project_store.apply_approved(
             approved.proposal,

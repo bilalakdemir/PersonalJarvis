@@ -67,6 +67,8 @@ keyring>=25.5
 
 # SSH to the user's own servers and virtual machines (Settings -> Computers)
 asyncssh[bcrypt]>=2.21
+# Owner-approved project changes require the WebAuthn verifier on every platform.
+webauthn>=2.8,<3.0
 
 # Audio I/O
 sounddevice>=0.5

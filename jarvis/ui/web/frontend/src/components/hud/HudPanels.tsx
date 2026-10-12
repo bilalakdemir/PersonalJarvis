@@ -40,7 +40,7 @@ import {
 
 import { useAerionCopy, type AerionSay } from "@/components/hud/aerionCopy";
 import { useUiLanguage } from "@/i18n";
-import { decideHudApproval, type HudDecision } from "@/lib/hudApi";
+import { decideHudApproval, enrollProjectOwnerPasskey, type HudDecision } from "@/lib/hudApi";
 import {
   ageOf,
   approvalMatches,
@@ -265,6 +265,9 @@ export function ApprovalCard({ card, t, nowMs }: { card: HudApproval; t: T; nowM
   const clock = useClock();
   const [pending, setPending] = useState<HudDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupSecret, setSetupSecret] = useState("");
+  const [enrolling, setEnrolling] = useState(false);
   const decidable = canDecide(card);
   const left = secondsLeft(card, nowMs);
   const tone = riskTone(card.risk_tier);
@@ -280,6 +283,20 @@ export function ApprovalCard({ card, t, nowMs }: { card: HudApproval; t: T; nowM
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setPending(null);
+    }
+  }
+
+  async function enrollPasskey() {
+    setEnrolling(true);
+    setError(null);
+    try {
+      await enrollProjectOwnerPasskey(setupSecret);
+      setSetupOpen(false);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setSetupSecret("");
+      setEnrolling(false);
     }
   }
 
@@ -359,6 +376,30 @@ export function ApprovalCard({ card, t, nowMs }: { card: HudApproval; t: T; nowM
             </dl>
           </details>
         </div>
+        {card.decision_channel === "project_state_api" && decidable ? (
+          <div className="aerion-owner-passkey-setup">
+            <button type="button" className="aerion-decide"
+              onClick={() => { setSetupOpen(!setupOpen); setSetupSecret(""); }}
+              disabled={enrolling || pending !== null}>
+              {setupOpen ? "Cancel passkey setup" : "Set up owner passkey"}
+            </button>
+            {setupOpen ? (
+              <form onSubmit={(event) => { event.preventDefault(); void enrollPasskey(); }}>
+                <label htmlFor={`owner-passkey-secret-${card.approval_id}`}>
+                  One-time enrollment secret (configured locally)
+                </label>
+                <input id={`owner-passkey-secret-${card.approval_id}`} type="password"
+                  autoComplete="off" value={setupSecret}
+                  onChange={(event) => setSetupSecret(event.target.value)}
+                  disabled={enrolling} required />
+                <button type="submit" className="aerion-decide"
+                  disabled={enrolling || !setupSecret}>
+                  {enrolling ? "Verifying…" : "Register owner passkey"}
+                </button>
+              </form>
+            ) : null}
+          </div>
+        ) : null}
         {error ? (
           <p className="aerion-row-error" role="alert">
             {error}

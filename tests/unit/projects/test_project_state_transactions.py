@@ -120,7 +120,7 @@ def test_proposal_is_read_only_and_contains_exact_diff(tmp_path: Path) -> None:
     assert all(change.unified_diff for change in proposal.changes)
     assert "N-10 — Project State Transaction Engine" in (
         root / "STATE.md"
-    ).read_text()
+    ).read_text(encoding="utf-8")
 
 
 def test_noncanonical_proposal_file_rejected(tmp_path: Path) -> None:

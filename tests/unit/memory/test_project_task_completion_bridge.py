@@ -14,14 +14,18 @@ from jarvis.memory.project_task_completion_bridge import (
 from jarvis.projects.signed_completion_verifier import SignedCompletionReceipt
 from jarvis.projects.task_journal import ProjectTaskJournal
 from jarvis.projects.task_reconciliation import ReconciliationBlocked
-
-from tests.unit.memory.test_project_state_approval import _setup, _registry
+from tests.unit.memory.test_project_passkey_approved_lifecycle import _prepared, _proof
+from tests.unit.memory.test_project_state_approval import _registry
 
 NOW_MS = 1_791_540_000_000
 
 
 async def _fixture(tmp_path, *, apply=True):
-    root, candidate_journal, queue, item, lifecycle, db_path = await _setup(tmp_path)
+    with pytest.MonkeyPatch.context() as env:
+        (root, candidate_journal, queue, item, lifecycle, db_path,
+         stored, service, owner_key, owner_credential) = await _prepared(
+            tmp_path, env
+        )
     registry = _registry(root)
     journal = ProjectTaskJournal(tmp_path / "task-journal.sqlite3", registry)
     revision = journal.add_task(
@@ -40,12 +44,13 @@ async def _fixture(tmp_path, *, apply=True):
     old_revision = journal.transition(
         "example", "N-10", "VERIFYING", expected_revision=revision,
         actor="pm", reason="pending verification")
-    stored = await lifecycle.prepare(item.id)
     if apply:
+        grant = _proof(service, stored, item, owner_key, owner_credential)
         applied = await lifecycle.approve_and_apply(
             queue_item_id=item.id,
             transaction_id=stored.transaction_id,
             proposal_digest=stored.proposal_digest,
+            owner_passkey_grant=grant.token,
         )
         assert applied.status == "COMMITTED"
     proposals = ProjectStateProposalStore(db_path)
@@ -104,6 +109,26 @@ async def test_real_applied_approval_and_signed_evidence_recover_journal(tmp_pat
                    for x in journal.audit("example"))
         assert final == journal.snapshot("example").revision
         assert await _recover(gateway(), item.id, revision) == final
+    finally:
+        await close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_applied_without_verified_owner_cannot_recover(tmp_path):
+    item, _, journal, revision, gateway, close = await _fixture(tmp_path)
+    try:
+        service = gateway()
+        conn = await service._proposals._ensure_open()
+        await conn.execute(
+            """UPDATE memory_project_state_proposals
+               SET approved_by_credential_id=NULL, approved_via=NULL,
+                   approval_assertion_digest=NULL
+               WHERE queue_item_id=?""",
+            (item.id,),
+        )
+        with pytest.raises(ReconciliationBlocked, match="approved and applied"):
+            await _recover(service, item.id, revision)
+        assert journal.snapshot("example").active_task == "N-10"
     finally:
         await close()
 

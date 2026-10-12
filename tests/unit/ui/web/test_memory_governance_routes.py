@@ -8,7 +8,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from jarvis.memory.persistent_approval import PersistentMemoryApprovalError
-from jarvis.memory.project_state_approval import ProjectStateProposalLifecycleError
 from jarvis.ui.web.control_auth import require_control_key_or_session
 from jarvis.ui.web.memory_governance_routes import router
 
@@ -99,10 +98,11 @@ class _Handle:
         return self.resume
 
 
-def _client(handle) -> TestClient:
+def _client(handle, *, passkeys=None) -> TestClient:
     app = FastAPI()
     app.include_router(router)
     app.state.memory_governance_handle = handle
+    app.state.project_approval_passkeys = passkeys
     app.dependency_overrides[require_control_key_or_session] = lambda: None
     return TestClient(app)
 
@@ -152,16 +152,18 @@ def test_persistent_identity_conflict_is_409() -> None:
     assert "digest" in response.json()["detail"]
 
 
-def test_project_approve_binds_all_three_identifiers() -> None:
+def test_project_approve_without_passkey_is_rejected() -> None:
     lifecycle = _ProjectLifecycle()
-    response = _client(_Handle(project=lifecycle)).post(
-        "/api/memory/governance/project-state/13/tx-123/feedface/approve"
-    )
-
-    assert response.status_code == 200
-    assert lifecycle.calls == [("approve", 13, "tx-123", "feedface")]
-    assert response.json()["status"] == "COMMITTED"
-    assert response.json()["resulting_state_revision"] == "a" * 64
+    client = _client(_Handle(project=lifecycle))
+    url = "/api/memory/governance/project-state/13/tx-123/feedface/approve"
+    response = client.post(url)
+    assert response.status_code == 422
+    assert lifecycle.calls == []
+    valid_shape_without_service = client.post(url, json={
+        "challenge": "unverified", "credential": {"id": "forged"},
+    })
+    assert valid_shape_without_service.status_code == 503
+    assert lifecycle.calls == []
 
 
 def test_project_reject_binds_all_three_identifiers() -> None:
@@ -176,15 +178,24 @@ def test_project_reject_binds_all_three_identifiers() -> None:
 
 
 def test_project_identity_conflict_is_409() -> None:
-    lifecycle = _ProjectLifecycle(
-        error=ProjectStateProposalLifecycleError("approval digest mismatch")
-    )
-    response = _client(_Handle(project=lifecycle)).post(
-        "/api/memory/governance/project-state/14/tx-456/wrong/approve"
+    class StoredProposals:
+        async def get(self, queue_item_id: int):
+            assert queue_item_id == 14
+            return SimpleNamespace(
+                status="awaiting-approval", transaction_id="tx-456",
+                proposal_digest="expected", project_id="example",
+            )
+
+    lifecycle = _ProjectLifecycle()
+    lifecycle._proposals = StoredProposals()
+    response = _client(_Handle(project=lifecycle), passkeys=object()).post(
+        "/api/memory/governance/project-state/14/tx-456/wrong/approve",
+        json={"challenge": "not-a-proof", "credential": {}},
     )
 
     assert response.status_code == 409
-    assert "digest" in response.json()["detail"]
+    assert "exact pending approval" in response.json()["detail"]
+    assert lifecycle.calls == []
 
 
 def test_mutating_routes_are_marked_dangerous() -> None:

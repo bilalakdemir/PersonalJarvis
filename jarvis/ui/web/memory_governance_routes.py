@@ -12,9 +12,15 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from jarvis.memory.persistent_approval import PersistentMemoryApprovalError
+from jarvis.memory.project_approval_passkeys import PasskeyApprovalError
 from jarvis.memory.project_state_approval import ProjectStateProposalLifecycleError
 
 from .control_auth import require_control_key_or_session
+from .project_passkey_routes import (
+    OwnerAssertion,
+    exact_pending_project,
+    passkey_service,
+)
 
 router = APIRouter(
     prefix="/api/memory/governance",
@@ -113,7 +119,10 @@ async def approve_project_state_memory(
     transaction_id: str,
     proposal_digest: str,
     request: Request,
+    body: OwnerAssertion,
 ) -> dict[str, Any]:
+    import asyncio
+
     handle = _handle(request)
     lifecycle = handle.project_state_approval_lifecycle
     if lifecycle is None:
@@ -121,13 +130,25 @@ async def approve_project_state_memory(
             status_code=503,
             detail="project-state memory approval is not available",
         )
+    service = passkey_service(request)
+    project_id = await exact_pending_project(
+        request, queue_item_id, transaction_id, proposal_digest,
+    )
     try:
+        grant = await asyncio.to_thread(
+            service.finish_approval, challenge=body.challenge,
+            credential=body.credential, project_id=project_id,
+            queue_item_id=queue_item_id, transaction_id=transaction_id,
+            proposal_digest=proposal_digest,
+        )
         result = await lifecycle.approve_and_apply(
             queue_item_id=queue_item_id,
             transaction_id=transaction_id,
             proposal_digest=proposal_digest,
+            owner_passkey_grant=grant.token,
+            require_owner_passkey=True,
         )
-    except ProjectStateProposalLifecycleError as exc:
+    except (ProjectStateProposalLifecycleError, PasskeyApprovalError) as exc:
         raise _conflict(exc) from exc
     return {
         "ok": True,
