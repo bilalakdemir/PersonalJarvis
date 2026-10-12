@@ -13,7 +13,7 @@ import os
 import re
 import shutil
 import subprocess
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlparse
 
 from jarvis.core.process_utils import NO_WINDOW_CREATIONFLAGS
@@ -264,14 +264,14 @@ def _windows_browser_candidates() -> list[str]:
     # Brave must be attempted before any OS URL association, even for HTTP.
     for root in roots:
         if root:
-            _add(str(Path(root) / _WINDOWS_BRAVE_RELPATH))
+            _add(str(Path(root).joinpath(*PureWindowsPath(_WINDOWS_BRAVE_RELPATH).parts)))
     if _brave_only():
         return out  # No implicit Edge/Chrome fallback or ShellExecute.
     _add(_windows_default_browser_exe())
     for relpath in _WINDOWS_BROWSER_RELPATHS:
         for root in roots:
             if root:
-                _add(str(Path(root) / relpath))
+                _add(str(Path(root).joinpath(*PureWindowsPath(relpath).parts)))
     return out
 
 
